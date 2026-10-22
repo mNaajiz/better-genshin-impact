@@ -7,7 +7,8 @@ using Size = OpenCvSharp.Size;
 namespace StoryPilot.Engine;
 
 /// <summary>
-/// Reads the yellow "274m" distance under the tracked quest's name (top-left, under the minimap).
+/// Reads the "274m" distance under the tracked quest's name (top-left, under the minimap).
+/// The text has the quest's colour: gold (Archon), purple (Story) or blue (World), so each is tried.
 /// No OCR model: the digits are split into blobs and each blob is compared with digits drawn
 /// from a few bold Windows fonts, which are close enough to the game's font at this size.
 /// </summary>
@@ -27,7 +28,33 @@ public static class DistanceReader
     public static int? Read(Mat bgr)
     {
         using var area = new Mat(bgr, TrackerArea);
-        using var mask = YellowMask(area);
+        foreach (var colour in new[] { QuestColour.Gold, QuestColour.Purple, QuestColour.Blue })
+        {
+            using var mask = colour == QuestColour.Gold ? YellowMask(area) : HueMask(area, colour);
+            if (ReadMask(mask) is { } metres)
+            {
+                return metres;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Bright coloured text pixels of a purple or blue quest (the text is pale: saturation ~90..180).
+    /// Blue sky can pass this too, but it forms big blobs that are dropped; it only hurts if it touches the digits.
+    /// </summary>
+    public static Mat HueMask(Mat bgr, QuestColour colour)
+    {
+        var (lo, hi) = colour == QuestColour.Purple ? (125, 165) : (92, 124);
+        using var hsv = bgr.CvtColor(ColorConversionCodes.BGR2HSV);
+        var mask = new Mat();
+        Cv2.InRange(hsv, new Scalar(lo, 70, 190), new Scalar(hi, 255, 255), mask);
+        return mask;
+    }
+
+    private static int? ReadMask(Mat mask)
+    {
         var blobs = Blobs(mask);
         if (blobs.Count == 0)
         {

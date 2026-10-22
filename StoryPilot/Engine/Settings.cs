@@ -40,6 +40,12 @@ public sealed class Settings
     /// <summary>Wait after the Teleport button (or pick list) appears before clicking it (ms).</summary>
     public int AutoTeleportDelayMs { get; set; } = 100;
 
+    /// <summary>After a story (and after Teleport to next quest), walk to the quest marker. Ctrl+Alt+W always works.</summary>
+    public bool WalkToQuestMarker { get; set; } = false;
+
+    /// <summary>Hold Shift to sprint while walking to the quest marker.</summary>
+    public bool WalkSprint { get; set; } = false;
+
     /// <summary>Delay before choosing an option, so you can read it (ms).</summary>
     public int OptionDelayMs { get; set; } = 0;
 

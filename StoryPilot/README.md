@@ -17,6 +17,14 @@ It only does story things:
   - If several icons overlap and a pick list opens, it chooses the teleport waypoint row (or another teleport point if there's no waypoint).
   - It waits a moment first (100 ms by default, under More settings) so the panel can finish sliding in.
   - It only acts on the big map and only while the game is the window in front. It uses a real click and puts the mouse back.
+- **Walk to quest marker** (off by default; **Ctrl+Alt+W** starts or stops it any time while StoryPilot is running): turns the camera toward the tracked quest's marker and walks there.
+  - With the switch on, it starts by itself after a story ends, and after "Teleport to next quest" has teleported and the loading screen is over.
+  - The marker is found by its shape, so gold (Archon), purple (Story) and blue (World) quests all work. The distance under the quest name is read in all three colours too.
+  - It looks down at the character (like BetterGI), keeps the marker straight ahead and holds W. It sprints with Shift if "Sprint while walking" is on under More settings.
+  - If the distance stops going down for 2 seconds, it jumps and side-steps. After 3 tries it gives up.
+  - It stops when the quest is 5 m away, when dialogue starts, or when an F prompt appears. It presses F itself only if the quest is within 10 m.
+  - It also stops on Ctrl+Alt+W or Ctrl+Alt+P, or as soon as you touch the keyboard or mouse. W and Shift are always released.
+  - It only runs while the game is the window in front. It uses real key presses and mouse movement.
 
 "Skip cutscenes" only clicks a black screen when it's a narration screen (pure black with centred white text) and only within 20 seconds of a dialogue StoryPilot was handling. Dark caves, loading screens and your own play are left alone.
 

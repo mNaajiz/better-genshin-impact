@@ -8,6 +8,7 @@ namespace StoryPilot;
 public sealed class MainForm : Form
 {
     private const int HotkeyId = 0x5150;
+    private const int WalkHotkeyId = 0x5151;
 
     private static readonly Color StartColor = Color.FromArgb(46, 125, 50);
     private static readonly Color StopColor = Color.FromArgb(198, 40, 40);
@@ -62,6 +63,7 @@ public sealed class MainForm : Form
         body.Controls.Add(Check("Close pop-ups", _settings.ClosePopups, v => _settings.ClosePopups = v));
         body.Controls.Add(Check("Teleport to next quest", _settings.TeleportToNextQuest, v => _settings.TeleportToNextQuest = v));
         body.Controls.Add(Check("Auto-teleport when I pick a waypoint", _settings.AutoTeleportOnWaypoint, v => _settings.AutoTeleportOnWaypoint = v));
+        body.Controls.Add(Check("Walk to quest marker after a story", _settings.WalkToQuestMarker, v => _settings.WalkToQuestMarker = v));
 
         body.Controls.Add(_status);
         body.Controls.Add(_stats);
@@ -79,7 +81,7 @@ public sealed class MainForm : Form
 
         body.Controls.Add(new Label
         {
-            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops.",
+            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops. Ctrl+Alt+W walks to the quest marker (game in front).",
             AutoSize = true,
             MaximumSize = new Size(370, 0),
             ForeColor = SystemColors.GrayText,
@@ -150,6 +152,7 @@ public sealed class MainForm : Form
         tpDelay.Controls.Add(tpDelayBox);
         tpDelay.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
         _more.Controls.Add(tpDelay);
+        _more.Controls.Add(Check("Sprint while walking to the quest", _settings.WalkSprint, v => _settings.WalkSprint = v));
 
         var save = new Button { Text = "Save screenshot of the game", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         save.Click += (_, _) =>
@@ -211,6 +214,11 @@ public sealed class MainForm : Form
         {
             _lastAction.Text = "Ctrl+Alt+P is used by another app; use the button instead.";
         }
+
+        if (!Native.RegisterHotKey(Handle, WalkHotkeyId, Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.W))
+        {
+            _lastAction.Text = "Ctrl+Alt+W is used by another app.";
+        }
     }
 
     protected override void WndProc(ref Message m)
@@ -219,6 +227,17 @@ public sealed class MainForm : Form
         {
             Toggle();
         }
+        else if (m.Msg == (int)Native.WM_HOTKEY && m.WParam == WalkHotkeyId)
+        {
+            if (_engine.IsRunning)
+            {
+                _engine.ToggleWalk();
+            }
+            else
+            {
+                _lastAction.Text = "Press Start first, then Ctrl+Alt+W to walk to the quest marker.";
+            }
+        }
 
         base.WndProc(ref m);
     }
@@ -226,6 +245,7 @@ public sealed class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         Native.UnregisterHotKey(Handle, HotkeyId);
+        Native.UnregisterHotKey(Handle, WalkHotkeyId);
         _statsTimer.Stop();
         _engine.Dispose();
         base.OnFormClosing(e);

@@ -50,6 +50,12 @@ public sealed class StoryEngine : IDisposable
     private WaypointAutoTeleport? _autoTeleport;
     private volatile bool _mapOpen;
     private DateTime _nextAutoTeleport = DateTime.MinValue;
+    private QuestWalker? _walker;
+    private volatile bool _walkRequested;
+    private volatile bool _walking;
+    private volatile bool _cancelWalk;
+    private DateTime _walkAfterLoadUntil = DateTime.MinValue;
+    private DateTime _walkMainUiSince = DateTime.MinValue;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -59,6 +65,19 @@ public sealed class StoryEngine : IDisposable
     public int Skipped { get; private set; }
 
     public bool IsRunning => _running;
+
+    /// <summary>Ctrl+Alt+W: walk to the quest marker now, or stop walking.</summary>
+    public void ToggleWalk()
+    {
+        if (_walking)
+        {
+            _cancelWalk = true;
+        }
+        else
+        {
+            _walkRequested = true;
+        }
+    }
 
     public StoryEngine(Settings settings)
     {
@@ -172,7 +191,19 @@ public sealed class StoryEngine : IDisposable
             return;
         }
 
-        if (_settings.TeleportToNextQuest && TryTeleportAfterStory(grey, clientW, clientH))
+        if (_walkRequested)
+        {
+            _walkRequested = false;
+            WalkToQuest();
+            return;
+        }
+
+        if (WalkAfterTeleportLoaded(grey))
+        {
+            return;
+        }
+
+        if ((_settings.TeleportToNextQuest || _settings.WalkToQuestMarker) && TryTeleportAfterStory(grey, clientW, clientH))
         {
             return;
         }
@@ -233,15 +264,84 @@ public sealed class StoryEngine : IDisposable
         }
 
         _storyPendingTeleport = false;
-        StatusChanged?.Invoke("Checking the next quest step…");
-        _teleport ??= new QuestTeleport(() => _capture?.Grab(), () => _running, line => Log?.Invoke(line));
-        var result = _teleport.Run(_hWnd, _input!, _settings.TeleportMinDistanceMetres, clientW, clientH);
-        if (result == QuestTeleport.Result.Teleported)
+        var result = QuestTeleport.Result.NotNeeded;
+        if (_settings.TeleportToNextQuest)
         {
-            Skipped++;
+            StatusChanged?.Invoke("Checking the next quest step…");
+            _teleport ??= new QuestTeleport(() => _capture?.Grab(), () => _running, line => Log?.Invoke(line));
+            result = _teleport.Run(_hWnd, _input!, _settings.TeleportMinDistanceMetres, clientW, clientH);
+            if (result == QuestTeleport.Result.Teleported)
+            {
+                Skipped++;
+            }
+        }
+
+        if (_settings.WalkToQuestMarker)
+        {
+            if (result == QuestTeleport.Result.Teleported)
+            {
+                // Walk once the loading screen is over and the normal view is back.
+                _walkAfterLoadUntil = DateTime.Now.AddSeconds(30);
+                _walkMainUiSince = DateTime.MinValue;
+            }
+            else if (result == QuestTeleport.Result.NotNeeded)
+            {
+                WalkToQuest();
+            }
         }
 
         return true;
+    }
+
+    private bool WalkAfterTeleportLoaded(Mat grey)
+    {
+        if (_walkAfterLoadUntil == DateTime.MinValue)
+        {
+            return false;
+        }
+
+        if (DateTime.Now > _walkAfterLoadUntil)
+        {
+            _walkAfterLoadUntil = DateTime.MinValue;
+            return false;
+        }
+
+        if (Vision.Find(grey, _paimonMenu) == null)
+        {
+            _walkMainUiSince = DateTime.MinValue;
+            return false;
+        }
+
+        if (_walkMainUiSince == DateTime.MinValue)
+        {
+            _walkMainUiSince = DateTime.Now;
+        }
+
+        if ((DateTime.Now - _walkMainUiSince).TotalMilliseconds < 1500)
+        {
+            return false;
+        }
+
+        _walkAfterLoadUntil = DateTime.MinValue;
+        WalkToQuest();
+        return true;
+    }
+
+    private void WalkToQuest()
+    {
+        StatusChanged?.Invoke("Walking to the quest marker (Ctrl+Alt+W or any key stops)");
+        _walker ??= new QuestWalker(() => _capture?.Grab(), () => _running && !_cancelWalk, line => Log?.Invoke(line));
+        _cancelWalk = false;
+        _walking = true;
+        try
+        {
+            _walker.Run(_hWnd, _input!, _settings.WalkSprint);
+        }
+        finally
+        {
+            _walking = false;
+            _cancelWalk = false;
+        }
     }
 
     /// <summary>
@@ -590,6 +690,7 @@ public sealed class StoryEngine : IDisposable
         Stop();
         _teleport?.Dispose();
         _autoTeleport?.Dispose();
+        _walker?.Dispose();
         foreach (var t in new[] { _talkUi, _optionIcon, _exclamationIcon, _chatPickF, _hangoutSkip, _pageClose, _guidingNotes, _chatHistory, _valiantChronicles, _paimonMenu, _mapScale, _mapSettings })
         {
             t.Dispose();
