@@ -55,3 +55,6 @@ __pycache__/
 
 # Claude
 .claude/*
+
+# StoryPilot: user screenshots used by local-only regression tests (never committed)
+StoryPilot.Tests/LocalData/

@@ -5,32 +5,37 @@ using Rect = OpenCvSharp.Rect;
 namespace StoryPilot.Engine;
 
 /// <summary>
-/// Camera steering toward the quest marker, with the camera looking down at the character (as BetterGI's
-/// MakeBlueTrackPointDirectlyAbove): straight ahead is "above the screen centre".
+/// Camera steering toward the quest marker at the normal camera angle: turn until the marker is
+/// near the middle of the screen, walk while it is roughly ahead.
 /// </summary>
 public static class WalkSteering
 {
-    /// <summary>Horizontal mouse movement to turn by, and whether to walk forward now.</summary>
-    public static (int MouseDx, bool Walk) Steer(Point marker)
+    /// <summary>Within this many pixels of the middle, no turning is needed.</summary>
+    public const int DeadZone = 25;
+
+    /// <summary>Walk forward while the marker is within this many pixels of the middle.</summary>
+    public const int WalkZone = 220;
+
+    /// <summary>
+    /// Horizontal mouse movement to turn by, and whether to walk forward now. <paramref name="previousDx"/> is
+    /// the last turn: when the direction flips (overshoot) the turn is halved, so it settles instead of swinging.
+    /// </summary>
+    public static (int MouseDx, bool Walk) Steer(Point marker, int previousDx)
     {
         var offset = marker.X - Vision.Width / 2;
-        if (marker.Y > Vision.Height / 2 + 40)
+        if (marker.Y > 820)
         {
-            // Behind the character: turn quickly toward its side, don't walk away from it.
-            return (offset >= 0 ? 150 : -150, false);
+            // Pinned to the bottom of the screen: it's behind. Turn toward its side, don't walk away from it.
+            return (offset >= 0 ? 300 : -300, false);
         }
 
-        var dx = Math.Clamp(offset / 8, -200, 200);
-        if (dx is > 0 and < 10)
+        var dx = Math.Abs(offset) <= DeadZone ? 0 : Math.Clamp(offset / 5, -250, 250);
+        if (dx != 0 && Math.Sign(dx) == -Math.Sign(previousDx))
         {
-            dx = 10;
-        }
-        else if (dx is < 0 and > -10)
-        {
-            dx = -10;
+            dx /= 2;
         }
 
-        return (dx, Math.Abs(offset) < 160);
+        return (dx, Math.Abs(offset) < WalkZone);
     }
 }
 
@@ -60,7 +65,7 @@ public sealed class StuckDetector(TimeSpan window)
 }
 
 /// <summary>
-/// "Walk to quest marker": turns the camera toward the tracked quest's on-screen marker and holds W.
+/// "Walk to quest marker": turns the camera toward the tracked quest's marker and holds W.
 /// Real input, so only while the game is the window in front. Stops on arrival, dialogue or an F prompt,
 /// when StoryPilot is stopped, or as soon as you touch the keyboard or mouse. W / Shift are always released.
 /// </summary>
@@ -68,10 +73,12 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
 {
     public const int ArriveMetres = 5;
     private const int MaxRecoveries = 3;
-    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan LostAfter = TimeSpan.FromSeconds(4);
 
-    private readonly QuestMarker _marker = new();
+    /// <summary>Search turns (300 px each) without seeing the marker before giving up: about one full turn.</summary>
+    private const int MaxSearchTurns = 10;
+
+    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+
     private readonly Template _talkUi = new("disabled_ui.png", new Rect(0, 0, 640, 135));
     private readonly Template _pickF = new("chat_pick_f.png", new Rect(1090, 330, 60, 420));
     private readonly Template _paimonMenu = new("paimon_menu.png", new Rect(0, 0, 480, 270));
@@ -114,10 +121,6 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         finally
         {
             ReleaseAll();
-            if (Native.GetForegroundWindow() == _hWnd)
-            {
-                Native.MoveMouse(0, -300); // tilt the camera back up from the top-down view
-            }
         }
     }
 
@@ -131,21 +134,14 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         }
 
         Thread.Sleep(150);
-        // V shows the tracked quest's navigation marker; then look down at the character.
-        Native.SendKey(Native.VK_V, false);
-        Native.SendKey(Native.VK_V, true);
-        Native.MoveMouse(0, 600);
         Rebaseline();
-        if (!Wait(1200))
-        {
-            return Cancelled();
-        }
 
         var started = DateTime.Now;
-        var lastSeen = DateTime.Now;
         int? lastMetres = null;
         var stuck = new StuckDetector(TimeSpan.FromSeconds(2));
         var recoveries = 0;
+        var searchTurns = 0;
+        var previousDx = 0;
         var strafeLeft = false;
         log("Walking to the quest marker…");
 
@@ -188,53 +184,60 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
                 return Finish(Result.Arrived, $"arrived ({metres} m)");
             }
 
-            var marker = _marker.Find(frame);
+            var marker = QuestMarker.Find(frame);
             if (marker == null)
             {
                 Hold(Native.VK_W, false);
                 Hold(Native.VK_SHIFT, false);
-                if (DateTime.Now - lastSeen > LostAfter)
+                if (++searchTurns > MaxSearchTurns)
                 {
                     return metres <= 10
                         ? Finish(Result.Arrived, $"arrived ({metres} m)")
-                        : Finish(Result.GaveUp, "can't see the quest marker");
+                        : Finish(Result.GaveUp, "can't see the quest marker (turned all the way round)");
                 }
 
-                Native.MoveMouse(250, 0); // look around for it
+                Native.MoveMouse(300, 0); // look around for it
+                previousDx = 0;
+                stuck.Restart(DateTime.Now);
+                Rebaseline();
+                if (!Wait(250))
+                {
+                    return Cancelled();
+                }
+
+                continue;
+            }
+
+            searchTurns = 0;
+            var (dx, walk) = WalkSteering.Steer(marker.Value.Centre, previousDx);
+            if (dx != 0)
+            {
+                Native.MoveMouse(dx, 0);
+            }
+
+            previousDx = dx;
+            Hold(Native.VK_W, walk);
+            Hold(Native.VK_SHIFT, walk && sprint);
+            if (!walk)
+            {
                 stuck.Restart(DateTime.Now);
             }
-            else
+            else if (stuck.Update(read, DateTime.Now))
             {
-                lastSeen = DateTime.Now;
-                var (dx, walk) = WalkSteering.Steer(marker.Value.Centre);
-                if (dx != 0)
+                if (++recoveries > MaxRecoveries)
                 {
-                    Native.MoveMouse(dx, 30); // the small downward nudge keeps the top-down view
+                    return Finish(Result.GaveUp, "stuck");
                 }
 
-                Hold(Native.VK_W, walk);
-                Hold(Native.VK_SHIFT, walk && sprint);
-                if (!walk)
-                {
-                    stuck.Restart(DateTime.Now);
-                }
-                else if (stuck.Update(read, DateTime.Now))
-                {
-                    if (++recoveries > MaxRecoveries)
-                    {
-                        return Finish(Result.GaveUp, "stuck");
-                    }
-
-                    // Jump, then side-step left or right (alternating) while still walking.
-                    Tap(Native.VK_SPACE);
-                    var side = strafeLeft ? Native.VK_A : Native.VK_D;
-                    strafeLeft = !strafeLeft;
-                    Hold(side, true);
-                    Thread.Sleep(450);
-                    Hold(side, false);
-                    stuck.Restart(DateTime.Now);
-                    log($"Walk: stuck, trying to get around it ({recoveries}/{MaxRecoveries})");
-                }
+                // Jump, then side-step left or right (alternating) while still walking.
+                Tap(Native.VK_SPACE);
+                var side = strafeLeft ? Native.VK_A : Native.VK_D;
+                strafeLeft = !strafeLeft;
+                Hold(side, true);
+                Thread.Sleep(450);
+                Hold(side, false);
+                stuck.Restart(DateTime.Now);
+                log($"Walk: stuck, trying to get around it ({recoveries}/{MaxRecoveries})");
             }
 
             Rebaseline();
@@ -341,7 +344,6 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
 
     public void Dispose()
     {
-        _marker.Dispose();
         _talkUi.Dispose();
         _pickF.Dispose();
         _paimonMenu.Dispose();

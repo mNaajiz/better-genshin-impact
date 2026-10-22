@@ -4,7 +4,8 @@ A small Genshin Impact story auto-play tool, cut down from BetterGI's "Auto Stor
 It only does story things:
 
 - **Advance dialogue**: presses Space while a conversation is playing.
-- **Auto-pick dialogue options**: prefers quest options (orange text or "!"), otherwise picks the first or last option.
+- **Auto-pick dialogue options**: prefers quest options (orange text or "!"), otherwise picks a random option (or the first / last, under More settings).
+  - Timing varies a little so it looks less mechanical: an extra 0–0.6 s before choosing, 0–0.3 s between dialogue lines, and clicks land a few pixels apart.
 - **Skip cutscenes**: clicks through black-screen narration and presses the hangout "Skip" button.
 - **Close pop-ups after dialogue**: item and tutorial pop-ups, and full-screen pages with an X.
 - **Teleport to next quest** (off by default): once a story dialogue ends and you're back in the normal view, it reads the quest distance under the quest name (e.g. "274m").
@@ -19,8 +20,9 @@ It only does story things:
   - It only acts on the big map and only while the game is the window in front. It uses a real click and puts the mouse back.
 - **Walk to quest marker** (off by default; **Ctrl+Alt+W** starts or stops it any time while StoryPilot is running): turns the camera toward the tracked quest's marker and walks there.
   - With the switch on, it starts by itself after a story ends, and after "Teleport to next quest" has teleported and the loading screen is over.
-  - The marker is found by its shape, so gold (Archon), purple (Story) and blue (World) quests all work. The distance under the quest name is read in all three colours too.
-  - It looks down at the character (like BetterGI), keeps the marker straight ahead and holds W. It sprints with Shift if "Sprint while walking" is on under More settings.
+  - The marker's icon changes (a small diamond, a door, …), but it always has the quest's colour, the same as the quest icon next to the quest name. StoryPilot reads that colour and looks for it in the game view. So gold (Archon), purple (Story) and blue (World) quests all work. The distance under the quest name is read in all three colours too.
+  - It keeps the normal camera angle, turns until the marker is near the middle of the screen, and holds W. Turns get smaller after an overshoot, so it settles instead of swinging. It sprints with Shift if "Sprint while walking" is on under More settings.
+  - If the marker isn't on screen, it turns to look for it, at most about one full turn, then gives up.
   - If the distance stops going down for 2 seconds, it jumps and side-steps. After 3 tries it gives up.
   - It stops when the quest is 5 m away, when dialogue starts, or when an F prompt appears. It presses F itself only if the quest is within 10 m.
   - It also stops on Ctrl+Alt+W or Ctrl+Alt+P, or as soon as you touch the keyboard or mouse. W and Shift are always released.

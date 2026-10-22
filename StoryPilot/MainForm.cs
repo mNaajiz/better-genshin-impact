@@ -107,11 +107,11 @@ public sealed class MainForm : Form
         var choice = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
         choice.Controls.Add(new Label { Text = "Otherwise choose", AutoSize = true, Margin = new Padding(0, 6, 6, 0) });
         var choiceBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
-        choiceBox.Items.AddRange(["the first option", "the last option"]);
-        choiceBox.SelectedIndex = _settings.DefaultOption == OptionChoice.First ? 0 : 1;
+        choiceBox.Items.AddRange(["the first option", "the last option", "a random option"]);
+        choiceBox.SelectedIndex = (int)_settings.DefaultOption;
         choiceBox.SelectedIndexChanged += (_, _) =>
         {
-            _settings.DefaultOption = choiceBox.SelectedIndex == 0 ? OptionChoice.First : OptionChoice.Last;
+            _settings.DefaultOption = (OptionChoice)choiceBox.SelectedIndex;
             _settings.Save();
         };
         choice.Controls.Add(choiceBox);

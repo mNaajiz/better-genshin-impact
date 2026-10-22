@@ -38,6 +38,9 @@ public sealed class StoryEngine : IDisposable
     private nint _hWnd;
     private GameInput? _input;
 
+    private readonly Random _rng = new();
+    private DateTime _nextAdvance = DateTime.MinValue;
+    private int _optionWaitMs;
     private DateTime _lastTalk = DateTime.MinValue;
     private DateTime _lastOptionAction = DateTime.MinValue;
     private DateTime _optionSeenSince = DateTime.MinValue;
@@ -421,10 +424,11 @@ public sealed class StoryEngine : IDisposable
 
     private void OnDialogue(Mat bgr, Mat grey, int clientW, int clientH)
     {
-        if (_settings.AdvanceDialogue)
+        if (_settings.AdvanceDialogue && DateTime.Now >= _nextAdvance)
         {
             _input!.Key(Native.VK_SPACE);
             Advanced++;
+            _nextAdvance = DateTime.Now.AddMilliseconds(OptionPicker.Jitter(0, OptionPicker.AdvanceJitterMs, _rng));
         }
 
         var optionHandled = _settings.PickOptions && TryPickOption(bgr, grey);
@@ -478,30 +482,28 @@ public sealed class StoryEngine : IDisposable
         if (_optionSeenSince == DateTime.MinValue)
         {
             _optionSeenSince = DateTime.Now;
+            _optionWaitMs = OptionPicker.Jitter(_settings.OptionDelayMs, OptionPicker.OptionJitterMs, _rng);
         }
 
-        if ((DateTime.Now - _optionSeenSince).TotalMilliseconds < _settings.OptionDelayMs
+        if ((DateTime.Now - _optionSeenSince).TotalMilliseconds < _optionWaitMs
             || (DateTime.Now - _lastOptionAction).TotalMilliseconds < 1000)
         {
             return true;
         }
 
-        var index = _settings.DefaultOption == OptionChoice.First ? 0 : options.Count - 1;
-        var why = _settings.DefaultOption == OptionChoice.First ? "first" : "last";
+        int? quest = null;
         if (_settings.PreferQuestOptions)
         {
-            var quest = options.FindIndex(o => o.Quest);
-            if (quest < 0)
+            var q = options.FindIndex(o => o.Quest);
+            if (q < 0)
             {
-                quest = options.FindIndex(o => Vision.OrangeRatio(bgr, TextArea(o.Rect)) > 0.06);
+                q = options.FindIndex(o => Vision.OrangeRatio(bgr, TextArea(o.Rect)) > 0.06);
             }
 
-            if (quest >= 0)
-            {
-                index = quest;
-                why = "quest";
-            }
+            quest = q >= 0 ? q : null;
         }
+
+        var (index, why) = OptionPicker.Choose(options.Count, quest, _settings.DefaultOption, _settings.PreferQuestOptions, _rng);
 
         if (index == options.Count - 1 && index > 0)
         {
@@ -594,7 +596,8 @@ public sealed class StoryEngine : IDisposable
             return;
         }
 
-        _input!.Click(16, 16);
+        var (x, y) = OptionPicker.Wobble(24, 24, 10, _rng);
+        _input!.Click(x, y);
         _lastClick = DateTime.Now;
         _lastTalk = DateTime.Now; // narration is part of the story; keep the window open
         Skipped++;
@@ -603,6 +606,7 @@ public sealed class StoryEngine : IDisposable
 
     private void ClickFrame(int x, int y, int clientW, int clientH)
     {
+        (x, y) = OptionPicker.Wobble(x, y, 3, _rng);
         _input!.Click(x * clientW / Vision.Width, y * clientH / Vision.Height);
     }
 

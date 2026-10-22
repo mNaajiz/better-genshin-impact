@@ -6,6 +6,7 @@ public enum OptionChoice
 {
     First,
     Last,
+    Random,
 }
 
 public sealed class Settings
@@ -17,7 +18,12 @@ public sealed class Settings
     public bool PickOptions { get; set; } = true;
 
     /// <summary>Which option to pick when no quest (orange / "!") option is present.</summary>
-    public OptionChoice DefaultOption { get; set; } = OptionChoice.First;
+    public OptionChoice DefaultOption { get; set; } = OptionChoice.Random;
+
+    /// <summary>Bumped when a default changes, so older settings files pick up the new default once.</summary>
+    public int Version { get; set; }
+
+    private const int CurrentVersion = 2;
 
     /// <summary>Prefer orange quest options and "!" options over the default choice.</summary>
     public bool PreferQuestOptions { get; set; } = true;
@@ -61,7 +67,15 @@ public sealed class Settings
         {
             if (File.Exists(FilePath))
             {
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                if (loaded.Version < 2)
+                {
+                    // Version 2: "Random" became the default option choice.
+                    loaded.DefaultOption = OptionChoice.Random;
+                    loaded.Version = CurrentVersion;
+                }
+
+                return loaded;
             }
         }
         catch (Exception)
@@ -74,6 +88,7 @@ public sealed class Settings
 
     public void Save()
     {
+        Version = CurrentVersion;
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
     }

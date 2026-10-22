@@ -31,7 +31,8 @@ public static class DistanceReader
         foreach (var colour in new[] { QuestColour.Gold, QuestColour.Purple, QuestColour.Blue })
         {
             using var mask = colour == QuestColour.Gold ? YellowMask(area) : HueMask(area, colour);
-            if (ReadMask(mask) is { } metres)
+            using var loose = colour == QuestColour.Gold ? LooseYellowMask(area) : HueMask(area, colour, loose: true);
+            if (ReadMask(mask, loose) is { } metres)
             {
                 return metres;
             }
@@ -44,16 +45,42 @@ public static class DistanceReader
     /// Bright coloured text pixels of a purple or blue quest (the text is pale: saturation ~90..180).
     /// Blue sky can pass this too, but it forms big blobs that are dropped; it only hurts if it touches the digits.
     /// </summary>
-    public static Mat HueMask(Mat bgr, QuestColour colour)
+    public static Mat HueMask(Mat bgr, QuestColour colour, bool loose = false)
     {
         var (lo, hi) = colour == QuestColour.Purple ? (125, 165) : (92, 124);
         using var hsv = bgr.CvtColor(ColorConversionCodes.BGR2HSV);
         var mask = new Mat();
-        Cv2.InRange(hsv, new Scalar(lo, 70, 190), new Scalar(hi, 255, 255), mask);
+        Cv2.InRange(hsv, new Scalar(lo, loose ? 40 : 70, loose ? 140 : 190), new Scalar(hi, 255, 255), mask);
         return mask;
     }
 
-    private static int? ReadMask(Mat mask)
+    /// <summary>
+    /// Gold text including its soft anti-aliased edge. Too blurry to read digits from, but it keeps the
+    /// thin top and bottom of an 8 closed, so counting loops works (the tight mask leaves them open).
+    /// </summary>
+    public static Mat LooseYellowMask(Mat bgr)
+    {
+        var channels = bgr.Split();
+        try
+        {
+            using var rb = new Mat();
+            Cv2.Subtract(channels[2], channels[0], rb);
+            using var rHigh = channels[2].GreaterThan(150);
+            using var rbHigh = rb.GreaterThan(60);
+            var mask = new Mat();
+            Cv2.BitwiseAnd(rHigh, rbHigh, mask);
+            return mask;
+        }
+        finally
+        {
+            foreach (var c in channels)
+            {
+                c.Dispose();
+            }
+        }
+    }
+
+    private static int? ReadMask(Mat mask, Mat loose)
     {
         var blobs = Blobs(mask);
         if (blobs.Count == 0)
@@ -99,7 +126,8 @@ public static class DistanceReader
             foreach (var d in digits)
             {
                 using var glyph = new Mat(mask, d);
-                var digit = Classify(glyph);
+                using var looseGlyph = new Mat(loose, new Rect(d.X - 1, d.Y - 1, d.Width + 2, d.Height + 2) & new Rect(0, 0, loose.Width, loose.Height));
+                var digit = Classify(glyph, Holes(looseGlyph));
                 if (digit == null)
                 {
                     return null;
@@ -190,7 +218,10 @@ public static class DistanceReader
         }
     }
 
-    private static int? Classify(Mat glyph)
+    // Closed loops per digit (4 is closed in some fonts, open in others).
+    private static readonly int[][] HolesByDigit = [[1], [0], [0], [0], [0, 1], [0], [1], [0], [2], [1]];
+
+    private static int? Classify(Mat glyph, int holes)
     {
         var (pixels, aspect) = Normalize(glyph);
         var best = new double[10];
@@ -206,6 +237,12 @@ public static class DistanceReader
             }
 
             var score = dot / Math.Sqrt(a * b + 1e-9) - 0.3 * Math.Abs(aspect - tAspect);
+            // Shape alone mixes up 3 / 8 (and 6 / 8 / 9) at this size; the number of loops tells them apart.
+            if (!HolesByDigit[digit].Contains(holes))
+            {
+                score -= 0.15;
+            }
+
             best[digit] = Math.Max(best[digit], score);
         }
 
@@ -217,6 +254,31 @@ public static class DistanceReader
         }
 
         return ranked[0].d;
+    }
+
+    /// <summary>Number of enclosed background regions (loops) in a binary glyph.</summary>
+    public static int Holes(Mat binary)
+    {
+        using var padded = new Mat();
+        Cv2.CopyMakeBorder(binary, padded, 1, 1, 1, 1, BorderTypes.Constant, Scalar.All(0));
+        using var inverted = new Mat();
+        Cv2.BitwiseNot(padded, inverted);
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+        var n = Cv2.ConnectedComponentsWithStats(inverted, labels, stats, centroids, PixelConnectivity.Connectivity4);
+        // Label 0 is the glyph itself; the outside background touches the padding at (0,0).
+        var outside = labels.At<int>(0, 0);
+        var holes = 0;
+        for (var i = 1; i < n; i++)
+        {
+            if (i != outside && stats.At<int>(i, 4) >= 2)
+            {
+                holes++;
+            }
+        }
+
+        return holes;
     }
 
     private static (float[] Pixels, double Aspect) Normalize(Mat binary)
