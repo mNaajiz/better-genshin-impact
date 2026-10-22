@@ -28,6 +28,12 @@ public sealed class Settings
     /// <summary>Close item / tutorial pop-ups that appear right after dialogue.</summary>
     public bool ClosePopups { get; set; } = true;
 
+    /// <summary>After a story, teleport to the waypoint nearest the next quest step if it is far away.</summary>
+    public bool TeleportToNextQuest { get; set; } = false;
+
+    /// <summary>Only teleport when the quest is at least this far (metres).</summary>
+    public int TeleportMinDistanceMetres { get; set; } = 150;
+
     /// <summary>Delay before choosing an option, so you can read it (ms).</summary>
     public int OptionDelayMs { get; set; } = 0;
 

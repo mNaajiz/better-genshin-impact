@@ -16,6 +16,7 @@ namespace StoryPilot.Engine;
 public sealed class StoryEngine : IDisposable
 {
     private const double PostDialogueSeconds = 10;
+    private const double NarrationSeconds = 20;
 
     private readonly Settings _settings;
     private readonly Template _talkUi;
@@ -43,6 +44,9 @@ public sealed class StoryEngine : IDisposable
     private DateTime _lastClick = DateTime.MinValue;
     private DateTime _lastPopupAction = DateTime.MinValue;
     private int _pageCloseStreak;
+    private bool _storyPendingTeleport;
+    private DateTime _mainUiSince = DateTime.MinValue;
+    private QuestTeleport? _teleport;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -87,7 +91,7 @@ public sealed class StoryEngine : IDisposable
     public void Stop()
     {
         _running = false;
-        _thread?.Join(2000);
+        _thread?.Join(5000);
         _thread = null;
         ReleaseGame();
         StatusChanged?.Invoke("Stopped");
@@ -151,7 +155,14 @@ public sealed class StoryEngine : IDisposable
         if (talking)
         {
             _lastTalk = DateTime.Now;
+            _storyPendingTeleport = true;
+            _mainUiSince = DateTime.MinValue;
             OnDialogue(bgr, grey, clientW, clientH);
+            return;
+        }
+
+        if (_settings.TeleportToNextQuest && TryTeleportAfterStory(grey, clientW, clientH))
+        {
             return;
         }
 
@@ -168,10 +179,58 @@ public sealed class StoryEngine : IDisposable
             _pageCloseStreak = 0;
         }
 
-        if (_settings.SkipCutscenes)
+        // Only right after a story StoryPilot was handling, so dark caves or your own play aren't clicked.
+        if (_settings.SkipCutscenes && (DateTime.Now - _lastTalk).TotalSeconds <= NarrationSeconds)
         {
             ClickBlackScreen(grey);
         }
+    }
+
+    /// <summary>
+    /// Once per story: shortly after the dialogue is over and the normal game view is back,
+    /// teleport toward the next quest step if it is far away.
+    /// </summary>
+    private bool TryTeleportAfterStory(Mat grey, int clientW, int clientH)
+    {
+        if (!_storyPendingTeleport)
+        {
+            return false;
+        }
+
+        if ((DateTime.Now - _lastTalk).TotalSeconds > PostDialogueSeconds + 5)
+        {
+            _storyPendingTeleport = false; // story ended somewhere else (menu, cutscene); don't act later
+            return false;
+        }
+
+        if (Vision.Find(grey, _paimonMenu) == null)
+        {
+            _mainUiSince = DateTime.MinValue;
+            return false;
+        }
+
+        if (_mainUiSince == DateTime.MinValue)
+        {
+            _mainUiSince = DateTime.Now;
+            return false;
+        }
+
+        // The quest text animates in; give it a moment before reading the distance.
+        if ((DateTime.Now - _mainUiSince).TotalMilliseconds < 2000)
+        {
+            return false;
+        }
+
+        _storyPendingTeleport = false;
+        StatusChanged?.Invoke("Checking the next quest step…");
+        _teleport ??= new QuestTeleport(() => _capture?.Grab(), () => _running, line => Log?.Invoke(line));
+        var result = _teleport.Run(_hWnd, _input!, _settings.TeleportMinDistanceMetres, clientW, clientH);
+        if (result == QuestTeleport.Result.Teleported)
+        {
+            Skipped++;
+        }
+
+        return true;
     }
 
     private void OnDialogue(Mat bgr, Mat grey, int clientW, int clientH)
@@ -343,15 +402,17 @@ public sealed class StoryEngine : IDisposable
             return;
         }
 
-        // Black screen with white narration text: mostly black, but not completely (loading / fade).
-        var rate = Vision.MiddleBlackRatio(grey);
-        if (rate is >= 0.5 and < 0.99)
+        // Narration: a mostly black screen with a line of white text in the middle.
+        if (Vision.IsNarrationScreen(grey) is not { } rate)
         {
-            _input!.Click(16, 16);
-            _lastClick = DateTime.Now;
-            Skipped++;
-            Log?.Invoke($"Clicked through black screen ({rate:P0} black)");
+            return;
         }
+
+        _input!.Click(16, 16);
+        _lastClick = DateTime.Now;
+        _lastTalk = DateTime.Now; // narration is part of the story; keep the window open
+        Skipped++;
+        Log?.Invoke($"Clicked through narration ({rate:P0} black)");
     }
 
     private void ClickFrame(int x, int y, int clientW, int clientH)
@@ -441,6 +502,7 @@ public sealed class StoryEngine : IDisposable
     public void Dispose()
     {
         Stop();
+        _teleport?.Dispose();
         foreach (var t in new[] { _talkUi, _optionIcon, _exclamationIcon, _chatPickF, _hangoutSkip, _pageClose, _guidingNotes, _chatHistory, _valiantChronicles, _paimonMenu, _mapScale, _mapSettings })
         {
             t.Dispose();

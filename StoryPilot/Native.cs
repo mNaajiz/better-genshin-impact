@@ -65,6 +65,62 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool UnregisterHotKey(nint hWnd, int id);
 
+    public const uint WM_MOUSEMOVE = 0x0200;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    /// <summary>Tick count of the last real or injected keyboard/mouse input anywhere on the desktop.</summary>
+    public static uint LastInputTick()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        return GetLastInputInfo(ref info) ? info.dwTime : 0;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public nint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public MOUSEINPUT mi; // MOUSEINPUT is the largest member of the union, so this is the full 40-byte INPUT on x64.
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+    /// <summary>Real left click at the current cursor position (foreground only).</summary>
+    public static void SendLeftClick()
+    {
+        var down = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_LEFTDOWN } };
+        var up = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_LEFTUP } };
+        SendInput(1, [down], Marshal.SizeOf<INPUT>());
+        Thread.Sleep(60);
+        SendInput(1, [up], Marshal.SizeOf<INPUT>());
+    }
+
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(nint hWnd, int attribute, out RECT value, int size);
 }

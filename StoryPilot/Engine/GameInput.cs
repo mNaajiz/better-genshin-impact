@@ -42,8 +42,33 @@ public sealed class GameInput(nint hWnd)
     {
         ActivateIfBackground();
         var p = (nint)((clientY << 16) | (clientX & 0xFFFF));
+        Native.PostMessage(hWnd, Native.WM_MOUSEMOVE, 0, p);
         Native.PostMessage(hWnd, Native.WM_LBUTTONDOWN, 1, p);
         Thread.Sleep(60);
         Native.PostMessage(hWnd, Native.WM_LBUTTONUP, 0, p);
+    }
+
+    public bool IsGameInFront => Native.GetForegroundWindow() == hWnd;
+
+    /// <summary>
+    /// Real mouse click (moves the cursor, then puts it back). Only used when the game is
+    /// already the window in front, for screens that ignore posted clicks.
+    /// </summary>
+    public bool ForegroundClick(int clientX, int clientY)
+    {
+        if (!IsGameInFront)
+        {
+            return false;
+        }
+
+        var pt = new Native.POINT { X = clientX, Y = clientY };
+        Native.ClientToScreen(hWnd, ref pt);
+        Native.GetCursorPos(out var old);
+        Native.SetCursorPos(pt.X, pt.Y);
+        Thread.Sleep(30);
+        Native.SendLeftClick();
+        Thread.Sleep(30);
+        Native.SetCursorPos(old.X, old.Y);
+        return true;
     }
 }

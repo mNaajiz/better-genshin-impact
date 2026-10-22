@@ -1,0 +1,252 @@
+using System.Drawing;
+using System.Drawing.Text;
+using OpenCvSharp;
+using Rect = OpenCvSharp.Rect;
+using Size = OpenCvSharp.Size;
+
+namespace StoryPilot.Engine;
+
+/// <summary>
+/// Reads the yellow "274m" distance under the tracked quest's name (top-left, under the minimap).
+/// No OCR model: the digits are split into blobs and each blob is compared with digits drawn
+/// from a few bold Windows fonts, which are close enough to the game's font at this size.
+/// </summary>
+public static class DistanceReader
+{
+    // Under the minimap; tall enough for a quest name that wraps onto two lines.
+    public static readonly Rect TrackerArea = new(75, 240, 255, 120);
+
+    private const int GlyphW = 10;
+    private const int GlyphH = 14;
+
+    private static readonly Lazy<List<(int Digit, float[] Pixels, double Aspect)>> Digits = new(BuildDigitTemplates);
+
+    /// <summary>
+    /// The distance in metres, or null if there is no tracked quest distance or a digit is unclear.
+    /// </summary>
+    public static int? Read(Mat bgr)
+    {
+        using var area = new Mat(bgr, TrackerArea);
+        using var mask = YellowMask(area);
+        var blobs = Blobs(mask);
+        if (blobs.Count == 0)
+        {
+            return null;
+        }
+
+        // Group blobs into text lines and look for "<digits>m": tall digits followed by a shorter "m".
+        foreach (var line in Lines(blobs))
+        {
+            var tallest = line.Max(b => b.Height);
+            if (tallest is < 8 or > 24)
+            {
+                continue;
+            }
+
+            var digits = new List<Rect>();
+            var sawM = false;
+            foreach (var b in line)
+            {
+                if (b.Height >= tallest * 0.85)
+                {
+                    if (sawM)
+                    {
+                        digits.Clear();
+                        break;
+                    }
+
+                    digits.Add(b);
+                }
+                else if (b.Height >= tallest * 0.5 && b.Bottom >= line.Max(x => x.Bottom) - 2)
+                {
+                    sawM = true; // lower-case m sits on the baseline (may be split into two blobs)
+                }
+            }
+
+            if (!sawM || digits.Count is 0 or > 5)
+            {
+                continue;
+            }
+
+            var value = 0;
+            foreach (var d in digits)
+            {
+                using var glyph = new Mat(mask, d);
+                var digit = Classify(glyph);
+                if (digit == null)
+                {
+                    return null;
+                }
+
+                value = value * 10 + digit.Value;
+            }
+
+            return value;
+        }
+
+        return null;
+    }
+
+    /// <summary>Yellow text pixels (about RGB 248,224,72), not the paler underline or the blue sky.</summary>
+    public static Mat YellowMask(Mat bgr)
+    {
+        var channels = bgr.Split();
+        try
+        {
+            using var b = channels[0];
+            using var g = channels[1];
+            using var r = channels[2];
+            using var rHigh = r.GreaterThan(200);
+            using var gHigh = g.GreaterThan(170);
+            using var bLow = b.LessThan(150);
+            using var rb = new Mat();
+            Cv2.Subtract(r, b, rb);
+            using var rbHigh = rb.GreaterThan(90);
+            var mask = new Mat();
+            Cv2.BitwiseAnd(rHigh, gHigh, mask);
+            Cv2.BitwiseAnd(mask, bLow, mask);
+            Cv2.BitwiseAnd(mask, rbHigh, mask);
+            return mask;
+        }
+        finally
+        {
+            foreach (var c in channels)
+            {
+                c.Dispose();
+            }
+        }
+    }
+
+    private static List<Rect> Blobs(Mat mask)
+    {
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+        var n = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids, PixelConnectivity.Connectivity8);
+        var list = new List<Rect>();
+        for (var i = 1; i < n; i++)
+        {
+            var r = new Rect(stats.At<int>(i, 0), stats.At<int>(i, 1), stats.At<int>(i, 2), stats.At<int>(i, 3));
+            var area = stats.At<int>(i, 4);
+            if (r.Height >= 4 && r.Width >= 2 && area >= 6 && r.Width < 40)
+            {
+                list.Add(r);
+            }
+        }
+
+        return list;
+    }
+
+    private static IEnumerable<List<Rect>> Lines(List<Rect> blobs)
+    {
+        var lines = new List<List<Rect>>();
+        foreach (var b in blobs.OrderBy(b => b.Bottom))
+        {
+            var line = lines.FirstOrDefault(l => Math.Abs(l[0].Bottom - b.Bottom) <= 3);
+            if (line == null)
+            {
+                lines.Add(line = []);
+            }
+
+            line.Add(b);
+        }
+
+        foreach (var line in lines)
+        {
+            line.Sort((a, b) => a.X.CompareTo(b.X));
+            // A distance line is compact: drop lines with big gaps (e.g. stray pixels in the quest name).
+            var compact = line.Zip(line.Skip(1), (a, b) => b.X - a.Right).All(gap => gap <= 6);
+            if (compact)
+            {
+                yield return line;
+            }
+        }
+    }
+
+    private static int? Classify(Mat glyph)
+    {
+        var (pixels, aspect) = Normalize(glyph);
+        var best = new double[10];
+        Array.Fill(best, double.MinValue);
+        foreach (var (digit, t, tAspect) in Digits.Value)
+        {
+            double dot = 0, a = 0, b = 0;
+            for (var i = 0; i < pixels.Length; i++)
+            {
+                dot += pixels[i] * t[i];
+                a += pixels[i] * pixels[i];
+                b += t[i] * t[i];
+            }
+
+            var score = dot / Math.Sqrt(a * b + 1e-9) - 0.3 * Math.Abs(aspect - tAspect);
+            best[digit] = Math.Max(best[digit], score);
+        }
+
+        var ranked = best.Select((s, d) => (s, d)).OrderByDescending(x => x.s).ToArray();
+        // Unsure (low score or two digits look alike): don't guess.
+        if (ranked[0].s < 0.7 || ranked[0].s - ranked[1].s < 0.05)
+        {
+            return null;
+        }
+
+        return ranked[0].d;
+    }
+
+    private static (float[] Pixels, double Aspect) Normalize(Mat binary)
+    {
+        using var nonZero = new Mat();
+        Cv2.FindNonZero(binary, nonZero);
+        var box = Cv2.BoundingRect(nonZero);
+        using var crop = new Mat(binary, box);
+        using var small = crop.Resize(new Size(GlyphW, GlyphH), 0, 0, InterpolationFlags.Linear);
+        var pixels = new float[GlyphW * GlyphH];
+        for (var y = 0; y < GlyphH; y++)
+        {
+            for (var x = 0; x < GlyphW; x++)
+            {
+                pixels[y * GlyphW + x] = small.At<byte>(y, x) / 255f;
+            }
+        }
+
+        return (pixels, box.Width / (double)box.Height);
+    }
+
+    private static List<(int, float[], double)> BuildDigitTemplates()
+    {
+        var list = new List<(int, float[], double)>();
+        string[] fonts = ["Segoe UI", "Segoe UI Semibold", "Arial", "Tahoma", "Verdana", "Calibri"];
+        foreach (var name in fonts)
+        {
+            using var font = new Font(name, 30, name.Contains("Semibold") ? FontStyle.Regular : FontStyle.Bold, GraphicsUnit.Pixel);
+            if (!string.Equals(font.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue; // font not installed
+            }
+
+            for (var d = 0; d <= 9; d++)
+            {
+                using var bmp = new Bitmap(48, 48);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.Black);
+                    g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                    g.DrawString(d.ToString(), font, Brushes.White, 4, 2);
+                }
+
+                using var mat = new Mat(48, 48, MatType.CV_8UC1);
+                for (var y = 0; y < 48; y++)
+                {
+                    for (var x = 0; x < 48; x++)
+                    {
+                        mat.Set(y, x, (byte)(bmp.GetPixel(x, y).R > 128 ? 255 : 0));
+                    }
+                }
+
+                var (pixels, aspect) = Normalize(mat);
+                list.Add((d, pixels, aspect));
+            }
+        }
+
+        return list;
+    }
+}

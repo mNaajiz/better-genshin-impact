@@ -17,22 +17,28 @@ public sealed class Template : IDisposable
     public Rect Roi { get; }
     public double Threshold { get; }
 
-    public Template(string file, Rect roi, double threshold = 0.8, bool blackIsTransparent = false)
+    public Template(string file, Rect roi, double threshold = 0.8, bool blackIsTransparent = false, bool useAlpha = false)
     {
         Name = Path.GetFileNameWithoutExtension(file);
         var path = Path.Combine(AppContext.BaseDirectory, "Assets", file);
-        using var color = Cv2.ImRead(path, ImreadModes.Color);
-        if (color.Empty())
+        using var raw = Cv2.ImRead(path, useAlpha ? ImreadModes.Unchanged : ImreadModes.Color);
+        if (raw.Empty())
         {
             throw new FileNotFoundException("Missing template image", path);
         }
 
+        using var color = raw.Channels() == 4 ? raw.CvtColor(ColorConversionCodes.BGRA2BGR) : raw.Clone();
         Image = color.CvtColor(ColorConversionCodes.BGR2GRAY);
         if (blackIsTransparent)
         {
             using var black = new Mat();
             Cv2.InRange(color, new Scalar(0, 0, 0), new Scalar(0, 0, 0), black);
             Mask = ~black;
+        }
+        else if (useAlpha && raw.Channels() == 4)
+        {
+            using var alpha = raw.ExtractChannel(3);
+            Mask = alpha.GreaterThan(128);
         }
 
         Roi = roi;
@@ -67,6 +73,10 @@ public static class Vision
         if (t.Mask != null)
         {
             Cv2.MatchTemplate(area, t.Image, result, TemplateMatchModes.CCoeffNormed, t.Mask);
+            Cv2.PatchNaNs(result, -1);
+            using var inf = new Mat();
+            Cv2.InRange(result, new Scalar(1.01), new Scalar(double.MaxValue), inf);
+            result.SetTo(new Scalar(-1), inf);
         }
         else
         {
@@ -96,7 +106,20 @@ public static class Vision
 
         using var area = new Mat(grey, roi);
         using var result = new Mat();
-        Cv2.MatchTemplate(area, t.Image, result, TemplateMatchModes.CCoeffNormed);
+        if (t.Mask != null)
+        {
+            Cv2.MatchTemplate(area, t.Image, result, TemplateMatchModes.CCoeffNormed, t.Mask);
+            // Masked matching yields NaN/inf on flat areas; treat those as no match.
+            Cv2.PatchNaNs(result, -1);
+            using var inf = new Mat();
+            Cv2.InRange(result, new Scalar(1.01), new Scalar(double.MaxValue), inf);
+            result.SetTo(new Scalar(-1), inf);
+        }
+        else
+        {
+            Cv2.MatchTemplate(area, t.Image, result, TemplateMatchModes.CCoeffNormed);
+        }
+
         for (var i = 0; i < maxCount; i++)
         {
             Cv2.MinMaxLoc(result, out _, out var max, out _, out var loc);
@@ -144,6 +167,45 @@ public static class Vision
         using var mask = new Mat();
         Cv2.InRange(band, new Scalar(0), new Scalar(0), mask);
         return Cv2.CountNonZero(mask) / (double)(band.Width * band.Height);
+    }
+
+    /// <summary>
+    /// Black-screen narration: the top third is essentially black, the middle third is mostly pure black
+    /// (as BetterGI checks), and there is a modest amount of white text roughly centred horizontally.
+    /// A dark cave or night scene fails the "pure black" test; a loading screen has no centred text.
+    /// Returns the middle band's black ratio, or null if this isn't a narration screen.
+    /// </summary>
+    public static double? IsNarrationScreen(Mat grey)
+    {
+        var rate = MiddleBlackRatio(grey);
+        if (rate is < 0.5 or >= 0.99)
+        {
+            return null;
+        }
+
+        using var top = new Mat(grey, new Rect(0, 0, grey.Width, grey.Height / 3));
+        using var topDark = new Mat();
+        Cv2.InRange(top, new Scalar(0), new Scalar(20), topDark);
+        if (Cv2.CountNonZero(topDark) < top.Width * top.Height * 0.8)
+        {
+            return null;
+        }
+
+        using var band = new Mat(grey, new Rect(0, grey.Height / 3, grey.Width, grey.Height / 3));
+        using var white = new Mat();
+        Cv2.InRange(band, new Scalar(180), new Scalar(255), white);
+        var whiteCount = Cv2.CountNonZero(white);
+        var bandArea = band.Width * band.Height;
+        if (whiteCount < bandArea * 0.002 || whiteCount > bandArea * 0.2)
+        {
+            return null;
+        }
+
+        using var points = new Mat();
+        Cv2.FindNonZero(white, points);
+        var box = Cv2.BoundingRect(points);
+        var centreX = box.X + box.Width / 2;
+        return Math.Abs(centreX - grey.Width / 2) <= grey.Width / 6 ? rate : null;
     }
 
     /// <summary>

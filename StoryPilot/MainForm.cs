@@ -60,6 +60,7 @@ public sealed class MainForm : Form
         body.Controls.Add(Check("Choose dialogue options", _settings.PickOptions, v => _settings.PickOptions = v));
         body.Controls.Add(Check("Skip cutscenes", _settings.SkipCutscenes, v => _settings.SkipCutscenes = v));
         body.Controls.Add(Check("Close pop-ups", _settings.ClosePopups, v => _settings.ClosePopups = v));
+        body.Controls.Add(Check("Teleport to next quest", _settings.TeleportToNextQuest, v => _settings.TeleportToNextQuest = v));
 
         body.Controls.Add(_status);
         body.Controls.Add(_stats);
@@ -124,6 +125,18 @@ public sealed class MainForm : Form
         delay.Controls.Add(delayBox);
         delay.Controls.Add(new Label { Text = "seconds", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
         _more.Controls.Add(delay);
+
+        var far = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+        far.Controls.Add(new Label { Text = "Teleport only if the quest is over", AutoSize = true, Margin = new Padding(0, 6, 6, 0) });
+        var farBox = new NumericUpDown { Minimum = 50, Maximum = 5000, Increment = 50, Value = Math.Clamp(_settings.TeleportMinDistanceMetres, 50, 5000), Width = 70 };
+        farBox.ValueChanged += (_, _) =>
+        {
+            _settings.TeleportMinDistanceMetres = (int)farBox.Value;
+            _settings.Save();
+        };
+        far.Controls.Add(farBox);
+        far.Controls.Add(new Label { Text = "m away", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
+        _more.Controls.Add(far);
 
         var save = new Button { Text = "Save screenshot of the game", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         save.Click += (_, _) =>
