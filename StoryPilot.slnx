@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="StoryPilot.Tests/StoryPilot.Tests.csproj" />
+  <Project Path="StoryPilot/StoryPilot.csproj" />
+</Solution>
