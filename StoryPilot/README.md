@@ -13,6 +13,10 @@ It only does story things:
   - Otherwise it closes the map and does nothing.
   - Locked waypoints are skipped.
   - Pressing Ctrl+Alt+P, or using the keyboard or mouse in the game, cancels it.
+- **Auto-teleport when I pick a waypoint** (on by default, separate from the story switches): on the big map, when you click a waypoint, Statue of The Seven, domain or other teleport point and its panel shows the Teleport button, StoryPilot presses it for you.
+  - If several icons overlap and a pick list opens, it chooses the teleport waypoint row (or another teleport point if there's no waypoint).
+  - It waits a moment first (100 ms by default, under More settings) so the panel can finish sliding in.
+  - It only acts on the big map and only while the game is the window in front. It uses a real click and puts the mouse back.
 
 "Skip cutscenes" only clicks a black screen when it's a narration screen (pure black with centred white text) and only within 20 seconds of a dialogue StoryPilot was handling. Dark caves, loading screens and your own play are left alone.
 

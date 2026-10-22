@@ -3,7 +3,7 @@ using StoryPilot.Engine;
 namespace StoryPilot;
 
 /// <summary>
-/// One big Start/Stop button, four switches, and a "More settings" section that stays hidden until needed.
+/// One big Start/Stop button, a few switches, and a "More settings" section that stays hidden until needed.
 /// </summary>
 public sealed class MainForm : Form
 {
@@ -61,6 +61,7 @@ public sealed class MainForm : Form
         body.Controls.Add(Check("Skip cutscenes", _settings.SkipCutscenes, v => _settings.SkipCutscenes = v));
         body.Controls.Add(Check("Close pop-ups", _settings.ClosePopups, v => _settings.ClosePopups = v));
         body.Controls.Add(Check("Teleport to next quest", _settings.TeleportToNextQuest, v => _settings.TeleportToNextQuest = v));
+        body.Controls.Add(Check("Auto-teleport when I pick a waypoint", _settings.AutoTeleportOnWaypoint, v => _settings.AutoTeleportOnWaypoint = v));
 
         body.Controls.Add(_status);
         body.Controls.Add(_stats);
@@ -137,6 +138,18 @@ public sealed class MainForm : Form
         far.Controls.Add(farBox);
         far.Controls.Add(new Label { Text = "m away", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
         _more.Controls.Add(far);
+
+        var tpDelay = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+        tpDelay.Controls.Add(new Label { Text = "Auto-teleport wait", AutoSize = true, Margin = new Padding(0, 6, 6, 0) });
+        var tpDelayBox = new NumericUpDown { Minimum = 0, Maximum = 2000, Increment = 50, Value = Math.Clamp(_settings.AutoTeleportDelayMs, 0, 2000), Width = 70 };
+        tpDelayBox.ValueChanged += (_, _) =>
+        {
+            _settings.AutoTeleportDelayMs = (int)tpDelayBox.Value;
+            _settings.Save();
+        };
+        tpDelay.Controls.Add(tpDelayBox);
+        tpDelay.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
+        _more.Controls.Add(tpDelay);
 
         var save = new Button { Text = "Save screenshot of the game", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         save.Click += (_, _) =>

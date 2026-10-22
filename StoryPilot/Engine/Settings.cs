@@ -34,6 +34,12 @@ public sealed class Settings
     /// <summary>Only teleport when the quest is at least this far (metres).</summary>
     public int TeleportMinDistanceMetres { get; set; } = 150;
 
+    /// <summary>On the big map, press Teleport as soon as you pick a waypoint / statue / domain.</summary>
+    public bool AutoTeleportOnWaypoint { get; set; } = true;
+
+    /// <summary>Wait after the Teleport button (or pick list) appears before clicking it (ms).</summary>
+    public int AutoTeleportDelayMs { get; set; } = 100;
+
     /// <summary>Delay before choosing an option, so you can read it (ms).</summary>
     public int OptionDelayMs { get; set; } = 0;
 

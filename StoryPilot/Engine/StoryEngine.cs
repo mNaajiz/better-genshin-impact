@@ -47,6 +47,9 @@ public sealed class StoryEngine : IDisposable
     private bool _storyPendingTeleport;
     private DateTime _mainUiSince = DateTime.MinValue;
     private QuestTeleport? _teleport;
+    private WaypointAutoTeleport? _autoTeleport;
+    private volatile bool _mapOpen;
+    private DateTime _nextAutoTeleport = DateTime.MinValue;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -114,7 +117,9 @@ public sealed class StoryEngine : IDisposable
                 Thread.Sleep(1000);
             }
 
-            var wait = Math.Max(50, _settings.TickMs) - (int)sw.ElapsedMilliseconds;
+            // Check the map more often so a picked waypoint teleports without a noticeable wait.
+            var tick = _mapOpen ? Math.Min(_settings.TickMs, 100) : _settings.TickMs;
+            var wait = Math.Max(50, tick) - (int)sw.ElapsedMilliseconds;
             if (wait > 0)
             {
                 Thread.Sleep(wait);
@@ -149,6 +154,7 @@ public sealed class StoryEngine : IDisposable
             : raw.Resize(new Size(Vision.Width, Vision.Height), 0, 0, InterpolationFlags.Area);
         using var grey = bgr.CvtColor(ColorConversionCodes.BGR2GRAY);
 
+        _mapOpen = false;
         var talking = Vision.Find(grey, _talkUi) != null;
         StatusChanged?.Invoke(talking ? "In dialogue — skipping" : "Running — waiting for dialogue");
 
@@ -158,6 +164,11 @@ public sealed class StoryEngine : IDisposable
             _storyPendingTeleport = true;
             _mainUiSince = DateTime.MinValue;
             OnDialogue(bgr, grey, clientW, clientH);
+            return;
+        }
+
+        if (_settings.AutoTeleportOnWaypoint && TryAutoTeleport(bgr, grey, clientW, clientH))
+        {
             return;
         }
 
@@ -231,6 +242,81 @@ public sealed class StoryEngine : IDisposable
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// On the big map, after you pick a waypoint / statue / domain: press its Teleport button
+    /// (or first choose the teleport row in the pick list). Real clicks, only while the game is in front,
+    /// since you're the one using the map; the mouse is put back afterwards.
+    /// </summary>
+    private bool TryAutoTeleport(Mat bgr, Mat grey, int clientW, int clientH)
+    {
+        _autoTeleport ??= new WaypointAutoTeleport();
+        _mapOpen = _autoTeleport.IsMapOpen(grey);
+        if (!_mapOpen || DateTime.Now < _nextAutoTeleport || !_input!.IsGameInFront)
+        {
+            return false;
+        }
+
+        if (_autoTeleport.Decide(bgr, grey) is not { } step)
+        {
+            return false;
+        }
+
+        // Let the panel / list finish sliding in, then make sure it is still there before clicking.
+        Thread.Sleep(Math.Clamp(_settings.AutoTeleportDelayMs, 0, 2000));
+        using (var again = GrabFrame1080())
+        {
+            if (again == null)
+            {
+                return false;
+            }
+
+            using var greyAgain = again.CvtColor(ColorConversionCodes.BGR2GRAY);
+            if (_autoTeleport.Decide(again, greyAgain) is not { } confirmed || confirmed.Kind != step.Kind)
+            {
+                return false;
+            }
+
+            step = confirmed;
+        }
+
+        if (!_input.ForegroundClick(step.At.X * clientW / Vision.Width, step.At.Y * clientH / Vision.Height))
+        {
+            return false;
+        }
+
+        if (step.Kind == WaypointAutoTeleport.Kind.ClickTeleport)
+        {
+            _nextAutoTeleport = DateTime.Now.AddMilliseconds(1500);
+            Log?.Invoke("Auto-teleport: pressed Teleport");
+        }
+        else
+        {
+            _nextAutoTeleport = DateTime.Now.AddMilliseconds(300);
+            Log?.Invoke($"Auto-teleport: chose the {step.What} in the list");
+        }
+
+        return true;
+    }
+
+    private Mat? GrabFrame1080()
+    {
+        var raw = _capture?.Grab();
+        if (raw == null || raw.Empty())
+        {
+            raw?.Dispose();
+            return null;
+        }
+
+        if (raw.Width == Vision.Width && raw.Height == Vision.Height)
+        {
+            return raw;
+        }
+
+        var resized = raw.Resize(new Size(Vision.Width, Vision.Height), 0, 0, InterpolationFlags.Area);
+        raw.Dispose();
+        return resized;
     }
 
     private void OnDialogue(Mat bgr, Mat grey, int clientW, int clientH)
@@ -503,6 +589,7 @@ public sealed class StoryEngine : IDisposable
     {
         Stop();
         _teleport?.Dispose();
+        _autoTeleport?.Dispose();
         foreach (var t in new[] { _talkUi, _optionIcon, _exclamationIcon, _chatPickF, _hangoutSkip, _pageClose, _guidingNotes, _chatHistory, _valiantChronicles, _paimonMenu, _mapScale, _mapSettings })
         {
             t.Dispose();
