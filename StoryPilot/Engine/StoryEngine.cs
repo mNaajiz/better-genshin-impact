@@ -146,7 +146,7 @@ public sealed class StoryEngine : IDisposable
         using var grey = bgr.CvtColor(ColorConversionCodes.BGR2GRAY);
 
         var talking = Vision.Find(grey, _talkUi) != null;
-        StatusChanged?.Invoke(talking ? "In dialogue" : "Watching");
+        StatusChanged?.Invoke(talking ? "In dialogue — skipping" : "Running — waiting for dialogue");
 
         if (talking)
         {
