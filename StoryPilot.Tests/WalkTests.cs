@@ -258,4 +258,146 @@ public class WalkTests(ITestOutputHelper output)
         // Unreadable distance is never "stuck".
         Assert.False(stuck.Update(null, t1.AddSeconds(10)));
     }
+    /// <summary>Golden V-trail sparkles (pure yellow at full brightness) at the given points.</summary>
+    private static void Trail(Mat frame, IEnumerable<Point> points)
+    {
+        foreach (var p in points)
+        {
+            Cv2.Circle(frame, p, 3, Hsv(30, 165, 255), -1);
+            Cv2.Line(frame, new Point(p.X - 7, p.Y), new Point(p.X + 7, p.Y), Hsv(30, 120, 255), 1);
+        }
+    }
+
+    private static IEnumerable<Point> Line(Point from, Point to, int count) =>
+        Enumerable.Range(0, count).Select(i => new Point(from.X + (to.X - from.X) * i / (count - 1), from.Y + (to.Y - from.Y) * i / (count - 1)));
+
+    [Fact]
+    public void FindsStraightTrailAhead()
+    {
+        using var frame = World(24);
+        Trail(frame, Line(new Point(965, 780), new Point(990, 220), 14));
+        var sw = Stopwatch.StartNew();
+        var hit = QuestTrail.Find(frame);
+        output.WriteLine($"{hit} in {sw.ElapsedMilliseconds} ms");
+        Assert.NotNull(hit);
+        Assert.InRange(hit!.Value.Aim.X, 960, 995);
+        Assert.InRange(hit.Value.Aim.Y, QuestTrail.LookAheadY - 70, QuestTrail.LookAheadY + 70);
+        Assert.False(hit.Value.SharpCurve);
+        Assert.True(WalkSteering.Steer(hit.Value.Aim, 0).Walk);
+    }
+
+    [Fact]
+    public void AimsAtTrailOffToTheSide()
+    {
+        // Trail starts left of the character and leads up and to the left: turn left.
+        using var frame = World(24);
+        Trail(frame, Line(new Point(600, 790), new Point(300, 250), 14));
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        Assert.True(hit!.Value.Aim.X < 600, $"aim {hit.Value.Aim}");
+        Assert.True(WalkSteering.Steer(hit.Value.Aim, 0).MouseDx < 0);
+
+        using var right = World(24);
+        Trail(right, Line(new Point(1100, 790), new Point(1450, 260), 14));
+        var r = QuestTrail.Find(right);
+        Assert.NotNull(r);
+        Assert.True(WalkSteering.Steer(r!.Value.Aim, 0).MouseDx > 0);
+    }
+
+    [Fact]
+    public void SharpTrailBendIsNoticed()
+    {
+        // Straight ahead, then a hard turn to the right.
+        using var frame = World(24);
+        Trail(frame, Line(new Point(960, 790), new Point(960, 470), 9).Concat(Line(new Point(1010, 450), new Point(1500, 330), 9)));
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        Assert.True(hit!.Value.SharpCurve);
+    }
+
+    [Fact]
+    public void NoTrailFromLampsSparklesOrTrailBehind()
+    {
+        // Pale path sparkles and lamps only.
+        using var frame = World(24);
+        Assert.Null(QuestTrail.Find(frame));
+
+        // A couple of stray yellow sparks are not a trail.
+        Trail(frame, [new Point(700, 500), new Point(1200, 600)]);
+        Assert.Null(QuestTrail.Find(frame));
+
+        // A trail beside / behind the feet (bottom of the screen) isn't ahead: leave it to the marker.
+        using var behind = World(24);
+        Trail(behind, Line(new Point(100, 940), new Point(500, 860), 8));
+        Assert.Null(QuestTrail.Find(behind));
+
+        // Sparkles in a row at one height (window sills) don't lead anywhere.
+        using var row = World(24);
+        Trail(row, Line(new Point(600, 500), new Point(1300, 520), 10));
+        Assert.Null(QuestTrail.Find(row));
+    }
+
+    [Fact]
+    public void TrailWinsOverMarkerButMarkerIsTheFallback()
+    {
+        // With a trail, the walker aims along it even if the marker is elsewhere; without one, at the marker.
+        using var frame = World(24);
+        Diamond(frame, new Point(1500, 300), 12, Hsv(24, 252, 250), 2);
+        Assert.Null(QuestTrail.Find(frame));
+        Assert.NotNull(QuestMarker.Find(frame));
+        Trail(frame, Line(new Point(900, 790), new Point(700, 250), 14));
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        Assert.True(hit!.Value.Aim.X < 960);
+    }
+
+    [Fact]
+    public void SprintsOnlyWhenStraightAndFarEnough()
+    {
+        Assert.True(QuestWalker.SprintAllowed(0, false, 80));
+        Assert.True(QuestWalker.SprintAllowed(-20, false, null));
+        Assert.False(QuestWalker.SprintAllowed(60, false, 80)); // tight turn
+        Assert.False(QuestWalker.SprintAllowed(0, true, 80)); // trail bends sharply
+        Assert.False(QuestWalker.SprintAllowed(0, false, 15)); // nearly there
+        Assert.False(QuestWalker.SprintAllowed(0, false, 9));
+    }
+
+    [Fact]
+    public void SprintsInRandomBursts()
+    {
+        var bursts = new SprintBursts(new Random(7));
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0);
+        var runs = new List<double>();
+        var rests = new List<double>();
+        var state = false;
+        var since = t0;
+        for (var ms = 0; ms <= 120_000; ms += 100)
+        {
+            var now = t0.AddMilliseconds(ms);
+            var on = bursts.Update(now, true);
+            if (on != state)
+            {
+                (state ? runs : rests).Add((now - since).TotalSeconds);
+                state = on;
+                since = now;
+            }
+        }
+
+        output.WriteLine($"runs {string.Join(", ", runs.Select(r => r.ToString("0.0")))}");
+        output.WriteLine($"rests {string.Join(", ", rests.Skip(1).Select(r => r.ToString("0.0")))}");
+        Assert.True(runs.Count >= 10);
+        Assert.All(runs, r => Assert.InRange(r, 0.9, 4.2));
+        Assert.All(rests.Skip(1), r => Assert.InRange(r, 1.9, 6.2));
+        Assert.True(runs.Max() - runs.Min() > 1, "burst lengths should vary");
+
+        // Not allowed (turning, near the end): never sprints, and a burst in progress ends at once.
+        var t1 = t0.AddMinutes(10);
+        while (!bursts.Update(t1, true))
+        {
+            t1 = t1.AddMilliseconds(100);
+        }
+
+        Assert.False(bursts.Update(t1.AddMilliseconds(100), false));
+        Assert.False(bursts.Update(t1.AddMilliseconds(200), true)); // resting after the cut-off burst
+    }
 }

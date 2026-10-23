@@ -49,8 +49,11 @@ public sealed class Settings
     /// <summary>After a story (and after Teleport to next quest), walk to the quest marker. Ctrl+Alt+W always works.</summary>
     public bool WalkToQuestMarker { get; set; } = false;
 
-    /// <summary>Hold Shift to sprint while walking to the quest marker.</summary>
+    /// <summary>Hold Shift the whole time while walking to the quest marker.</summary>
     public bool WalkSprint { get; set; } = false;
+
+    /// <summary>Sprint in random short bursts while walking to the quest (ignored when <see cref="WalkSprint"/> is on).</summary>
+    public bool WalkSprintBursts { get; set; } = true;
 
     /// <summary>Delay before choosing an option, so you can read it (ms).</summary>
     public int OptionDelayMs { get; set; } = 0;

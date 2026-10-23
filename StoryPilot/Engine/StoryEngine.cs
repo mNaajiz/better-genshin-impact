@@ -338,7 +338,7 @@ public sealed class StoryEngine : IDisposable
         _walking = true;
         try
         {
-            _walker.Run(_hWnd, _input!, _settings.WalkSprint);
+            _walker.Run(_hWnd, _input!, _settings.WalkSprint, _settings.WalkSprintBursts);
         }
         finally
         {

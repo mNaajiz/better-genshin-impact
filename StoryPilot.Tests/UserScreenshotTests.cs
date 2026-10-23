@@ -63,4 +63,53 @@ public class UserScreenshotTests
 
         Assert.Null(DistanceReader.Read(frame));
     }
+    [Fact]
+    public void FollowsTrailUpTheStairs()
+    {
+        // V trail straight up the stairs ahead (marker not visible, "Higher 60m").
+        using var frame = Local("trail_stairs_60m.png");
+        if (frame == null)
+        {
+            return;
+        }
+
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        Assert.InRange(hit!.Value.Aim.X, 930, 1000);
+        Assert.False(hit.Value.SharpCurve);
+        var (dx, walk) = WalkSteering.Steer(hit.Value.Aim, 0);
+        Assert.True(walk);
+        Assert.InRange(dx, -10, 10);
+    }
+
+    [Fact]
+    public void FollowsTrailToTheLeftBeforeTheMarker()
+    {
+        // The trail starts left of the character and swings right toward the door marker further on:
+        // follow the trail (turn left), not the marker (which is slightly right).
+        using var frame = Local("marker_door_83m.png");
+        if (frame == null)
+        {
+            return;
+        }
+
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        Assert.InRange(hit!.Value.Aim.X, 600, 800);
+        Assert.True(WalkSteering.Steer(hit.Value.Aim, 0).MouseDx < 0);
+    }
+
+    [Theory]
+    [InlineData("marker_diamond_78m.png")] // lamps, no trail
+    [InlineData("sparkles_behind_274m.png")] // trail sparkles only beside the feet: use the marker
+    public void NoTrailAhead(string file)
+    {
+        using var frame = Local(file);
+        if (frame == null)
+        {
+            return;
+        }
+
+        Assert.Null(QuestTrail.Find(frame));
+    }
 }

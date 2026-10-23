@@ -65,7 +65,8 @@ public sealed class StuckDetector(TimeSpan window)
 }
 
 /// <summary>
-/// "Walk to quest marker": turns the camera toward the tracked quest's marker and holds W.
+/// "Walk to quest marker": follows the glowing quest trail (pressing V to show it) or, where there is no
+/// trail, turns the camera toward the tracked quest's marker, and holds W.
 /// Real input, so only while the game is the window in front. Stops on arrival, dialogue or an F prompt,
 /// when StoryPilot is stopped, or as soon as you touch the keyboard or mouse. W / Shift are always released.
 /// </summary>
@@ -77,7 +78,19 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
     /// <summary>Search turns (300 px each) without seeing the marker before giving up: about one full turn.</summary>
     private const int MaxSearchTurns = 10;
 
+    /// <summary>No sprinting this close to the quest.</summary>
+    public const int SprintStopMetres = 15;
+
+    /// <summary>Sprint only while turning less than this per step (mouse px).</summary>
+    public const int SprintMaxTurn = 30;
+
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>Press V again when the trail has been gone this long (it fades after a while)…</summary>
+    private static readonly TimeSpan TrailGoneBeforeV = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>…but not more often than this.</summary>
+    private static readonly TimeSpan MinVInterval = TimeSpan.FromSeconds(6);
 
     private readonly Template _talkUi = new("disabled_ui.png", new Rect(0, 0, 640, 135));
     private readonly Template _pickF = new("chat_pick_f.png", new Rect(1090, 330, 60, 420));
@@ -95,7 +108,11 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         Cancelled,
     }
 
-    public Result Run(nint hWnd, GameInput input, bool sprint)
+    /// <summary>
+    /// <paramref name="sprintAlways"/>: hold Shift whenever walking straight; otherwise <paramref name="sprintBursts"/>:
+    /// sprint in random bursts. Never on tight turns, sharp trail bends or near the quest.
+    /// </summary>
+    public Result Run(nint hWnd, GameInput input, bool sprintAlways, bool sprintBursts)
     {
         _hWnd = hWnd;
         if (!input.IsGameInFront)
@@ -116,7 +133,7 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
 
         try
         {
-            return Walk(sprint);
+            return Walk(sprintAlways, sprintBursts);
         }
         finally
         {
@@ -124,7 +141,7 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         }
     }
 
-    private Result Walk(bool sprint)
+    private Result Walk(bool sprintAlways, bool sprintBursts)
     {
         // Started from Ctrl+Alt+W: let go of the hotkey first, or releasing it would count as "you took over".
         var released = DateTime.Now.AddSeconds(3);
@@ -143,6 +160,10 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         var searchTurns = 0;
         var previousDx = 0;
         var strafeLeft = false;
+        var bursts = new SprintBursts(Random.Shared);
+        var lastV = DateTime.MinValue;
+        var trailSeen = DateTime.MinValue;
+        var outOfView = 0;
         log("Walking to the quest marker…");
 
         while (DateTime.Now - started < Timeout)
@@ -162,6 +183,13 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
             if (Vision.Find(grey, _talkUi) != null)
             {
                 return Finish(Result.HandedOver, "dialogue started");
+            }
+
+            // A menu opened (V with nothing to navigate to opens the quest list, for one): stop, don't walk blind.
+            outOfView = Vision.Find(grey, _paimonMenu) == null ? outOfView + 1 : 0;
+            if (outOfView >= 3)
+            {
+                return Finish(Result.GaveUp, "left the normal game view");
             }
 
             var read = DistanceReader.Read(frame);
@@ -184,8 +212,20 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
                 return Finish(Result.Arrived, $"arrived ({metres} m)");
             }
 
-            var marker = QuestMarker.Find(frame);
-            if (marker == null)
+            // Show the trail (again) when it isn't there: at the start, and after it fades.
+            var trail = QuestTrail.Find(frame);
+            if (trail != null)
+            {
+                trailSeen = DateTime.Now;
+            }
+            else if (DateTime.Now - trailSeen >= TrailGoneBeforeV && DateTime.Now - lastV >= MinVInterval)
+            {
+                lastV = DateTime.Now;
+                Tap(Native.VK_V);
+            }
+
+            var aim = trail?.Aim ?? QuestMarker.Find(frame)?.Centre;
+            if (aim == null)
             {
                 Hold(Native.VK_W, false);
                 Hold(Native.VK_SHIFT, false);
@@ -193,7 +233,7 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
                 {
                     return metres <= 10
                         ? Finish(Result.Arrived, $"arrived ({metres} m)")
-                        : Finish(Result.GaveUp, "can't see the quest marker (turned all the way round)");
+                        : Finish(Result.GaveUp, "can't see the quest trail or marker (turned all the way round)");
                 }
 
                 Native.MoveMouse(300, 0); // look around for it
@@ -209,15 +249,18 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
             }
 
             searchTurns = 0;
-            var (dx, walk) = WalkSteering.Steer(marker.Value.Centre, previousDx);
+            var (dx, walk) = WalkSteering.Steer(aim.Value, previousDx);
             if (dx != 0)
             {
                 Native.MoveMouse(dx, 0);
             }
 
             previousDx = dx;
+            var mayRun = walk && SprintAllowed(dx, trail?.SharpCurve ?? false, metres);
+            var burst = bursts.Update(DateTime.Now, mayRun);
             Hold(Native.VK_W, walk);
-            Hold(Native.VK_SHIFT, walk && sprint);
+            Hold(Native.VK_SHIFT, mayRun && (sprintAlways || (sprintBursts && burst)));
+
             if (!walk)
             {
                 stuck.Restart(DateTime.Now);
@@ -249,6 +292,10 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
 
         return Finish(Result.GaveUp, "took too long");
     }
+
+    /// <summary>Sprinting is fine when going (nearly) straight, the trail doesn't bend sharply and the quest isn't close.</summary>
+    public static bool SprintAllowed(int turnDx, bool sharpCurve, int? metres) =>
+        Math.Abs(turnDx) < SprintMaxTurn && !sharpCurve && metres is null or > SprintStopMetres;
 
     private Result Finish(Result result, string why)
     {

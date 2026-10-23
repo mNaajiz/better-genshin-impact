@@ -152,7 +152,8 @@ public sealed class MainForm : Form
         tpDelay.Controls.Add(tpDelayBox);
         tpDelay.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(4, 6, 0, 0) });
         _more.Controls.Add(tpDelay);
-        _more.Controls.Add(Check("Sprint while walking to the quest", _settings.WalkSprint, v => _settings.WalkSprint = v));
+        _more.Controls.Add(Check("Sprint now and then while walking to the quest", _settings.WalkSprintBursts, v => _settings.WalkSprintBursts = v));
+        _more.Controls.Add(Check("Sprint all the way (uses more stamina)", _settings.WalkSprint, v => _settings.WalkSprint = v));
 
         var save = new Button { Text = "Save screenshot of the game", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         save.Click += (_, _) =>

@@ -21,11 +21,14 @@ It only does story things:
 - **Walk to quest marker** (off by default; **Ctrl+Alt+W** starts or stops it any time while StoryPilot is running): turns the camera toward the tracked quest's marker and walks there.
   - With the switch on, it starts by itself after a story ends, and after "Teleport to next quest" has teleported and the loading screen is over.
   - The marker's icon changes (a small diamond, a door, …), but it always has the quest's colour, the same as the quest icon next to the quest name. StoryPilot reads that colour and looks for it in the game view. So gold (Archon), purple (Story) and blue (World) quests all work. The distance under the quest name is read in all three colours too.
-  - It keeps the normal camera angle, turns until the marker is near the middle of the screen, and holds W. Turns get smaller after an overshoot, so it settles instead of swinging. It sprints with Shift if "Sprint while walking" is on under More settings.
-  - If the marker isn't on screen, it turns to look for it, at most about one full turn, then gives up.
+  - It follows the glowing quest trail on the ground when there is one. It presses V to show the trail at the start, and again whenever the trail has faded. It aims at the part of the trail a little way ahead, so it goes around corners the way the trail does. Trail sparkles beside or behind your feet are ignored.
+  - With no trail in view, it steers toward the marker instead.
+  - It keeps the normal camera angle, turns until the trail or marker is near the middle of the screen, and holds W. Turns get smaller after an overshoot, so it settles instead of swinging.
+  - Sprinting (More settings): "Sprint now and then" (on by default) holds Shift in random bursts of 1-4 s with 2-6 s breaks. "Sprint all the way" holds it the whole time. Either way it doesn't sprint while turning hard, where the trail bends sharply, or within 15 m of the quest.
+  - If neither the trail nor the marker is on screen, it turns to look for them, at most about one full turn, then gives up. It also stops if a menu opens.
   - If the distance stops going down for 2 seconds, it jumps and side-steps. After 3 tries it gives up.
   - It stops when the quest is 5 m away, when dialogue starts, or when an F prompt appears. It presses F itself only if the quest is within 10 m.
-  - It also stops on Ctrl+Alt+W or Ctrl+Alt+P, or as soon as you touch the keyboard or mouse. W and Shift are always released.
+  - It also stops on Ctrl+Alt+W or Ctrl+Alt+P, or as soon as you touch the keyboard or mouse. W, Shift and any side-step keys are always released.
   - It only runs while the game is the window in front. It uses real key presses and mouse movement.
 
 "Skip cutscenes" only clicks a black screen when it's a narration screen (pure black with centred white text) and only within 20 seconds of a dialogue StoryPilot was handling. Dark caves, loading screens and your own play are left alone.
