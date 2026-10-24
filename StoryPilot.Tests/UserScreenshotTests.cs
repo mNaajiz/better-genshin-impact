@@ -83,10 +83,10 @@ public class UserScreenshotTests
     }
 
     [Fact]
-    public void FollowsTrailToTheLeftBeforeTheMarker()
+    public void CutsTheCornerOfTheTrailTowardTheDoorMarker()
     {
-        // The trail starts left of the character and swings right toward the door marker further on:
-        // follow the trail (turn left), not the marker (which is slightly right).
+        // The trail starts left of the character and swings right toward the door marker further on.
+        // On its own it aims left; blended with the marker the walk goes more directly across the plaza.
         using var frame = Local("marker_door_83m.png");
         if (frame == null)
         {
@@ -97,6 +97,14 @@ public class UserScreenshotTests
         Assert.NotNull(hit);
         Assert.InRange(hit!.Value.Aim.X, 600, 800);
         Assert.True(WalkSteering.Steer(hit.Value.Aim, 0).MouseDx < 0);
+
+        // Trail (left) and door marker (slightly right) roughly agree: cut the corner, leaning to the marker.
+        var marker = QuestMarker.Find(frame);
+        Assert.NotNull(marker);
+        var trail = Heading.Of(hit.Value.Aim);
+        var door = Heading.Of(marker!.Value.Centre);
+        var blended = Heading.Blend(trail, door, 83)!.Value;
+        Assert.True(blended > (trail + door) / 2 && blended < door, $"trail {trail:0.0}°, marker {door:0.0}°, walk {blended:0.0}°");
     }
 
     [Theory]

@@ -4,7 +4,7 @@ using Rect = OpenCvSharp.Rect;
 
 namespace StoryPilot.Engine;
 
-/// <summary>Where the quest trail is: the point to aim at, and whether it bends sharply further on.</summary>
+/// <summary>Where the quest trail leads: the point to aim at (on a line fitted through it), and whether it bends sharply further on.</summary>
 public readonly record struct TrailHit(Point Aim, bool SharpCurve, int Sparkles);
 
 /// <summary>
@@ -99,10 +99,11 @@ public static class QuestTrail
             return null;
         }
 
-        // Look-ahead band; if the visible trail is all nearer (or all further), use its far (or near) end.
+        // Aim at the look-ahead height on a straight line fitted through the whole visible trail, not at the
+        // sparkles there: the game sometimes draws the trail zigzagging, and the fit averages that out.
+        // If the visible trail is all nearer (or all further), use its far (or near) end.
         var bandY = Math.Clamp(LookAheadY, minY + BandHalfHeight / 2, maxY - BandHalfHeight / 2);
-        var aim = Centre(sparkles, bandY - BandHalfHeight, bandY + BandHalfHeight)
-            ?? sparkles.MinBy(s => Math.Abs(s.Centre.Y - bandY)).Centre;
+        var aim = new Point((int)Math.Round(FitX(sparkles, bandY)), bandY);
 
         // Bend: direction of the near third against the far third of the trail.
         var third = (maxY - minY) / 3;
@@ -117,6 +118,46 @@ public static class QuestTrail
         }
 
         return new TrailHit(aim, sharp, sparkles.Count);
+    }
+
+    /// <summary>
+    /// x at height <paramref name="y"/> on the line x = a + b·y fitted (pixel-weighted) through the sparkles.
+    /// Fitted twice: the second time without sparkles far off the first line (a stray spark in the scenery).
+    /// </summary>
+    public static double FitX(IReadOnlyList<(Point Centre, int Pixels)> sparkles, int y)
+    {
+        var (a, b) = FitLine(sparkles);
+        var residuals = sparkles.Select(s => Math.Abs(s.Centre.X - (a + b * s.Centre.Y))).OrderBy(r => r).ToList();
+        var limit = Math.Max(40, 3 * residuals[residuals.Count / 2]);
+        var kept = sparkles.Where(s => Math.Abs(s.Centre.X - (a + b * s.Centre.Y)) <= limit).ToList();
+        if (kept.Count >= MinSparkles)
+        {
+            (a, b) = FitLine(kept);
+        }
+
+        return a + b * y;
+    }
+
+    private static (double A, double B) FitLine(IReadOnlyList<(Point Centre, int Pixels)> sparkles)
+    {
+        double sw = 0, sx = 0, sy = 0, syy = 0, sxy = 0;
+        foreach (var (p, px) in sparkles)
+        {
+            sw += px;
+            sx += px * p.X;
+            sy += px * p.Y;
+            syy += (double)px * p.Y * p.Y;
+            sxy += (double)px * p.X * p.Y;
+        }
+
+        var spread = sw * syy - sy * sy;
+        if (spread <= 0)
+        {
+            return (sx / sw, 0);
+        }
+
+        var b = (sw * sxy - sx * sy) / spread;
+        return ((sx - b * sy) / sw, b);
     }
 
     /// <summary>Pixel-weighted centre of the sparkles between two heights.</summary>

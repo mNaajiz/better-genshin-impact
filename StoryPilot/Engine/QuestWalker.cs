@@ -20,15 +20,32 @@ public static class WalkSteering
     /// Horizontal mouse movement to turn by, and whether to walk forward now. <paramref name="previousDx"/> is
     /// the last turn: when the direction flips (overshoot) the turn is halved, so it settles instead of swinging.
     /// </summary>
+    /// <summary>A marker below this line is pinned to the bottom of the screen: it's behind.</summary>
+    public const int BehindY = 820;
+
+    /// <summary>Headings within this many degrees of straight ahead need no turning (smoothed zigzags stay inside).</summary>
+    public const double HeadingDeadZone = 3;
+
     public static (int MouseDx, bool Walk) Steer(Point marker, int previousDx)
     {
         var offset = marker.X - Vision.Width / 2;
-        if (marker.Y > 820)
+        if (marker.Y > BehindY)
         {
             // Pinned to the bottom of the screen: it's behind. Turn toward its side, don't walk away from it.
             return (offset >= 0 ? 300 : -300, false);
         }
 
+        return SteerOffset(offset, previousDx);
+    }
+
+    /// <summary>The same for a (blended, smoothed) heading in degrees.</summary>
+    public static (int MouseDx, bool Walk) SteerHeading(double degrees, int previousDx) =>
+        Math.Abs(degrees) < HeadingDeadZone
+            ? (0, true)
+            : SteerOffset((int)Math.Round(Heading.ToOffset(degrees)), previousDx);
+
+    private static (int MouseDx, bool Walk) SteerOffset(int offset, int previousDx)
+    {
         var dx = Math.Abs(offset) <= DeadZone ? 0 : Math.Clamp(offset / 5, -250, 250);
         if (dx != 0 && Math.Sign(dx) == -Math.Sign(previousDx))
         {
@@ -65,8 +82,8 @@ public sealed class StuckDetector(TimeSpan window)
 }
 
 /// <summary>
-/// "Walk to quest marker": follows the glowing quest trail (pressing V to show it) or, where there is no
-/// trail, turns the camera toward the tracked quest's marker, and holds W.
+/// "Walk to quest marker": heads for a blend of the glowing quest trail (pressing V to show it) and the
+/// tracked quest's marker (either alone when only one is on screen), smoothed over time, and holds W.
 /// Real input, so only while the game is the window in front. Stops on arrival, dialogue or an F prompt,
 /// when StoryPilot is stopped, or as soon as you touch the keyboard or mouse. W / Shift are always released.
 /// </summary>
@@ -164,6 +181,7 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
         var lastV = DateTime.MinValue;
         var trailSeen = DateTime.MinValue;
         var outOfView = 0;
+        var heading = new HeadingFilter();
         log("Walking to the quest marker…");
 
         while (DateTime.Now - started < Timeout)
@@ -224,9 +242,32 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
                 Tap(Native.VK_V);
             }
 
-            var aim = trail?.Aim ?? QuestMarker.Find(frame)?.Centre;
-            if (aim == null)
+            // Walk a blend of the trail and the marker (see Heading), smoothed over time.
+            var marker = QuestMarker.Find(frame)?.Centre;
+            var markerAhead = marker is { Y: <= WalkSteering.BehindY } ? marker : null;
+            var raw = Heading.Blend(trail is { } t ? Heading.Of(t.Aim) : null, markerAhead is { } m ? Heading.Of(m) : null, metres);
+            if (raw == null && marker is { } behind)
             {
+                // Only the marker, and it's behind: turn round toward it without walking.
+                heading.Reset();
+                Hold(Native.VK_W, false);
+                Hold(Native.VK_SHIFT, false);
+                searchTurns = 0;
+                previousDx = WalkSteering.Steer(behind, previousDx).MouseDx;
+                Native.MoveMouse(previousDx, 0);
+                stuck.Restart(DateTime.Now);
+                Rebaseline();
+                if (!Wait(150))
+                {
+                    return Cancelled();
+                }
+
+                continue;
+            }
+
+            if (raw == null)
+            {
+                heading.Reset();
                 Hold(Native.VK_W, false);
                 Hold(Native.VK_SHIFT, false);
                 if (++searchTurns > MaxSearchTurns)
@@ -249,14 +290,17 @@ public sealed class QuestWalker(Func<Mat?> grab, Func<bool> keepGoing, Action<st
             }
 
             searchTurns = 0;
-            var (dx, walk) = WalkSteering.Steer(aim.Value, previousDx);
+            var smoothed = heading.Update(raw.Value);
+            var steady = heading.Steady;
+            var (dx, walk) = WalkSteering.SteerHeading(smoothed, previousDx);
             if (dx != 0)
             {
                 Native.MoveMouse(dx, 0);
             }
 
+            heading.Turned(dx);
             previousDx = dx;
-            var mayRun = walk && SprintAllowed(dx, trail?.SharpCurve ?? false, metres);
+            var mayRun = walk && steady && SprintAllowed(dx, trail?.SharpCurve ?? false, metres);
             var burst = bursts.Update(DateTime.Now, mayRun);
             Hold(Native.VK_W, walk);
             Hold(Native.VK_SHIFT, mayRun && (sprintAlways || (sprintBursts && burst)));

@@ -352,6 +352,126 @@ public class WalkTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ZigzagTrailAimsAlongItsOverallDirection()
+    {
+        // The trail zigzags ±70 px either side of a line leading slightly right; the aim is on that line.
+        using var frame = World(24);
+        var zigzag = Line(new Point(960, 790), new Point(1060, 230), 15).Select((p, i) => new Point(p.X + (i % 2 == 0 ? -70 : 70), p.Y));
+        Trail(frame, zigzag);
+        var hit = QuestTrail.Find(frame);
+        Assert.NotNull(hit);
+        var lineX = 960 + 100.0 * (790 - hit!.Value.Aim.Y) / 560;
+        output.WriteLine($"aim {hit.Value.Aim}, line at {lineX:0}");
+        Assert.InRange(hit.Value.Aim.X, lineX - 15, lineX + 15);
+    }
+
+    [Theory]
+    [InlineData(0.15)]
+    [InlineData(0.3)]
+    [InlineData(0.5)]
+    public void ZigzagTrailTowardMarkerGivesSteadyHeading(double degreesPerPx)
+    {
+        // Simulated walk: the marker is 25° to the right and the trail leads there too, but each frame the
+        // trail reading zigzags ±8°. The camera turns degreesPerPx per mouse px (different sensitivities).
+        var target = 25.0;
+        var filter = new HeadingFilter();
+        var previous = 0;
+        var flips = 0;
+        var turned = new List<int>();
+        for (var step = 0; step < 60; step++)
+        {
+            var trail = target + (step % 2 == 0 ? 8 : -8);
+            var raw = Heading.Blend(trail, target, 90)!.Value;
+            var (dx, walk) = WalkSteering.SteerHeading(filter.Update(raw), previous);
+            if (step >= 20)
+            {
+                Assert.True(walk);
+                turned.Add(dx);
+                flips += dx != 0 && previous != 0 && Math.Sign(dx) != Math.Sign(previous) ? 1 : 0;
+            }
+
+            filter.Turned(dx);
+            target -= dx * degreesPerPx;
+            previous = dx;
+        }
+
+        output.WriteLine($"{degreesPerPx}°/px (learned {filter.DegreesPerPx:0.00}): ends {target:0.0}°, turns {string.Join(" ", turned)}");
+        Assert.InRange(target, -5, 5);
+        Assert.True(flips <= 2, $"weaving: {flips} turn reversals");
+        Assert.All(turned, dx => Assert.InRange(dx, -15, 15));
+        Assert.True(filter.Steady);
+    }
+
+    [Fact]
+    public void TrailAndMarkerBlend()
+    {
+        // Agreeing: lean toward the marker (cut the corner), the more so the nearer the quest is.
+        var far = Heading.Blend(10, 25, 100)!.Value;
+        var near = Heading.Blend(10, 25, 20)!.Value;
+        Assert.InRange(far, 17.5, 25);
+        Assert.InRange(near, 21, 25);
+        Assert.True(near > far);
+
+        // Strongly diverging: the trail is going round something; follow it.
+        Assert.InRange(Heading.Blend(-40, 30, 80)!.Value, -40, -30);
+        Assert.InRange(Heading.Blend(-40, 30, 25)!.Value, -40, -15);
+
+        // Far away (or unknown distance) the trail counts more than the marker even when they roughly agree.
+        Assert.True(Heading.MarkerWeight(0, 30, 200) < Heading.MarkerWeight(0, 30, 30));
+        Assert.InRange(Heading.MarkerWeight(0, 0, null), 0.7, 0.8);
+
+        // Only one of them on screen: that one.
+        Assert.Equal(-12, Heading.Blend(-12, null, 50));
+        Assert.Equal(7, Heading.Blend(null, 7, 50));
+        Assert.Null(Heading.Blend(null, null, 50));
+    }
+
+    [Fact]
+    public void DivergingTrailIsFollowedOnScreen()
+    {
+        // Trail leads up and left (round a building); the marker is off to the right: turn left.
+        using var frame = World(24);
+        var markerAt = new Point(1500, 300);
+        Diamond(frame, markerAt, 12, Hsv(24, 252, 250), 2);
+        Trail(frame, Line(new Point(900, 790), new Point(450, 250), 14));
+        var trail = QuestTrail.Find(frame);
+        var marker = QuestMarker.Find(frame);
+        Assert.NotNull(trail);
+        Assert.NotNull(marker);
+        var blended = Heading.Blend(Heading.Of(trail!.Value.Aim), Heading.Of(marker!.Value.Centre), 80)!.Value;
+        output.WriteLine($"trail {Heading.Of(trail.Value.Aim):0}°, marker {Heading.Of(marker.Value.Centre):0}°, walk {blended:0}°");
+        Assert.True(blended < -HeadingFilter.SteadyDegrees);
+        Assert.True(WalkSteering.SteerHeading(blended, 0).MouseDx < 0);
+    }
+
+    [Fact]
+    public void HeadingFilterSmoothsJitterButTakesRealChanges()
+    {
+        var filter = new HeadingFilter();
+        Assert.Equal(0, filter.Update(0));
+        for (var i = 0; i < 5; i++)
+        {
+            filter.Update(i % 2 == 0 ? 4 : -4);
+        }
+
+        Assert.True(filter.Steady);
+
+        // One odd reading (a lamp caught in the trail) only nudges it…
+        var once = filter.Update(80);
+        Assert.InRange(once, 10, 40);
+        Assert.False(filter.Steady);
+
+        // …a new direction that holds is taken at once.
+        Assert.Equal(80, filter.Update(80));
+
+        // Small steady changes are followed gradually.
+        filter.Reset();
+        filter.Update(0);
+        var smoothed = filter.Update(10);
+        Assert.InRange(smoothed, 3, 7);
+    }
+
+    [Fact]
     public void SprintsOnlyWhenStraightAndFarEnough()
     {
         Assert.True(QuestWalker.SprintAllowed(0, false, 80));
