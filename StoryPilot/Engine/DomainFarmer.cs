@@ -39,6 +39,9 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Top-left icon shown inside a domain instead of the Paimon menu (BetterGI Element/in_domain.png).</summary>
     private readonly Template _inDomain = new("in_domain.png", new Rect(0, 0, 480, 270), 0.8, useAlpha: true);
 
+    /// <summary>"Click anywhere to close" under the Ley Line Disorder note shown on arrival (from your screenshot).</summary>
+    private readonly Template _clickToClose = new("domain_click_to_close.png", new Rect(700, 620, 520, 160), 0.8);
+
     private readonly Template _pickF = new("chat_pick_f.png", new Rect(1090, 330, 60, 420));
 
     /// <summary>"Challenge Completed" banner, made from your screenshot; until then you press Ctrl+Alt+D after the fight.</summary>
@@ -95,7 +98,8 @@ public sealed class DomainFarmer : IDisposable
         WaitForHotkeyRelease();
         try
         {
-            if (!InsideDomain() && !Enter())
+            var ready = Has(_clickToClose) ? ArriveInDomain() : InsideDomain() || Enter();
+            if (!ready)
             {
                 return;
             }
@@ -161,17 +165,66 @@ public sealed class DomainFarmer : IDisposable
         }
 
         _status("Domain: loading");
-        if (!WaitFor(InsideDomain, TimeSpan.FromSeconds(45)))
+        if (!ArriveInDomain())
         {
             _log("Domain: didn't see the domain after loading");
             return false;
         }
 
-        // The objective / Ley Line Disorder note that opens on arrival closes with any click.
-        Sleep(1500);
-        ClickFrame(Middle, 800);
-        Sleep(800);
         return true;
+    }
+
+    /// <summary>
+    /// After loading: close the Ley Line Disorder note ("Click anywhere to close") if it shows,
+    /// then wait for the normal in-domain view.
+    /// </summary>
+    private bool ArriveInDomain()
+    {
+        var until = DateTime.Now.AddSeconds(45);
+        var closed = false;
+        while (DateTime.Now < until)
+        {
+            if (!_keepGoing() || UserTookOver())
+            {
+                return false;
+            }
+
+            using var frame = Grab1080();
+            using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+            if (grey != null)
+            {
+                if (Vision.Find(grey, _clickToClose) != null)
+                {
+                    _log("Domain: closing the Ley Line Disorder note");
+                    ClickFrame(Middle, 900);
+                    closed = true;
+                    Sleep(800);
+                    continue;
+                }
+
+                if (Vision.Find(grey, _inDomain) != null && Vision.Find(grey, _confirm) == null)
+                {
+                    // The note can open a moment after the view appears; give it a second before walking.
+                    if (closed || !Sleep(1200))
+                    {
+                        return _keepGoing();
+                    }
+
+                    using var again = Grab1080();
+                    using var greyAgain = again?.CvtColor(ColorConversionCodes.BGR2GRAY);
+                    if (greyAgain != null && Vision.Find(greyAgain, _clickToClose) == null)
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+            }
+
+            Thread.Sleep(150);
+        }
+
+        return false;
     }
 
     /// <summary>Wait for the yellow-circle button, click it, and wait for that screen to go away.</summary>
@@ -469,7 +522,7 @@ public sealed class DomainFarmer : IDisposable
         ClickFrame(b.X + b.Width / 2, b.Y + b.Height / 2);
         _status("Domain: next round, loading");
         Sleep(2000);
-        if (!WaitFor(InsideDomain, TimeSpan.FromSeconds(45)))
+        if (!ArriveInDomain())
         {
             _log("Domain: didn't get back into the domain (out of resin?)");
             return false;
@@ -628,6 +681,7 @@ public sealed class DomainFarmer : IDisposable
         _exit.Dispose();
         _inDomain.Dispose();
         _pickF.Dispose();
+        _clickToClose.Dispose();
         _completed?.Dispose();
         _tree?.Dispose();
     }
