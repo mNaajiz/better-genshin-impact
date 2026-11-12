@@ -9,6 +9,7 @@ public sealed class MainForm : Form
 {
     private const int HotkeyId = 0x5150;
     private const int WalkHotkeyId = 0x5151;
+    private const int DomainHotkeyId = 0x5152;
 
     private static readonly Color StartColor = Color.FromArgb(46, 125, 50);
     private static readonly Color StopColor = Color.FromArgb(198, 40, 40);
@@ -81,7 +82,7 @@ public sealed class MainForm : Form
 
         body.Controls.Add(new Label
         {
-            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops. Ctrl+Alt+W walks to the quest marker (game in front).",
+            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops. Ctrl+Alt+W walks to the quest marker (game in front). Ctrl+Alt+D farms a domain from its door (game in front); press it again once the challenge is complete.",
             AutoSize = true,
             MaximumSize = new Size(370, 0),
             ForeColor = SystemColors.GrayText,
@@ -95,7 +96,7 @@ public sealed class MainForm : Form
         _engine.Log += line => BeginInvokeSafe(() => _lastAction.Text = $"Last: {line} ({DateTime.Now:HH:mm:ss})");
         _engine.StatusChanged += s => BeginInvokeSafe(() => _status.Text = s);
         _statsTimer.Tick += (_, _) => _stats.Text = _engine.IsRunning
-            ? $"Lines skipped {_engine.Advanced} · Options chosen {_engine.OptionsPicked} · Cutscenes/pop-ups {_engine.Skipped}"
+            ? _engine.DomainRunning ? $"Domain rounds {_engine.DomainRounds}" : $"Lines skipped {_engine.Advanced} · Options chosen {_engine.OptionsPicked} · Cutscenes/pop-ups {_engine.Skipped}"
             : "";
         _statsTimer.Start();
     }
@@ -216,6 +217,11 @@ public sealed class MainForm : Form
             _lastAction.Text = "Ctrl+Alt+P is used by another app; use the button instead.";
         }
 
+        if (!Native.RegisterHotKey(Handle, DomainHotkeyId, Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.D))
+        {
+            _lastAction.Text = "Ctrl+Alt+D is used by another app.";
+        }
+
         if (!Native.RegisterHotKey(Handle, WalkHotkeyId, Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.W))
         {
             _lastAction.Text = "Ctrl+Alt+W is used by another app.";
@@ -240,6 +246,18 @@ public sealed class MainForm : Form
             }
         }
 
+        else if (m.Msg == (int)Native.WM_HOTKEY && m.WParam == DomainHotkeyId)
+        {
+            if (_engine.IsRunning)
+            {
+                _engine.ToggleDomain();
+            }
+            else
+            {
+                _lastAction.Text = "Press Start first, then Ctrl+Alt+D at the domain door.";
+            }
+        }
+
         base.WndProc(ref m);
     }
 
@@ -247,6 +265,7 @@ public sealed class MainForm : Form
     {
         Native.UnregisterHotKey(Handle, HotkeyId);
         Native.UnregisterHotKey(Handle, WalkHotkeyId);
+        Native.UnregisterHotKey(Handle, DomainHotkeyId);
         _statsTimer.Stop();
         _engine.Dispose();
         base.OnFormClosing(e);

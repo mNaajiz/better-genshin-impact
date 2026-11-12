@@ -58,3 +58,6 @@ __pycache__/
 
 # StoryPilot: user screenshots used by local-only regression tests (never committed)
 StoryPilot.Tests/LocalData/
+
+# StoryPilot: BetterGI reward-tree model, copied locally from a BetterGI install
+StoryPilot/Assets/Model/

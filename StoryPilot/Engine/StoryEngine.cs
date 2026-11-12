@@ -59,6 +59,9 @@ public sealed class StoryEngine : IDisposable
     private volatile bool _cancelWalk;
     private DateTime _walkAfterLoadUntil = DateTime.MinValue;
     private DateTime _walkMainUiSince = DateTime.MinValue;
+    private DomainFarmer? _domain;
+    private volatile bool _domainRequested;
+    private volatile bool _cancelDomain;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -79,6 +82,30 @@ public sealed class StoryEngine : IDisposable
         else
         {
             _walkRequested = true;
+        }
+    }
+
+    public bool DomainRunning => _domain is { Current: not DomainFarmer.Phase.Idle };
+
+    public int DomainRounds => _domain?.Rounds ?? 0;
+
+    /// <summary>
+    /// Ctrl+Alt+D: start domain farming; during the fight, "the challenge is complete";
+    /// at any other point, stop domain farming.
+    /// </summary>
+    public void ToggleDomain()
+    {
+        if (_domain is { Current: DomainFarmer.Phase.Fighting })
+        {
+            _domain.FightDone();
+        }
+        else if (DomainRunning)
+        {
+            _cancelDomain = true;
+        }
+        else
+        {
+            _domainRequested = true;
         }
     }
 
@@ -191,6 +218,13 @@ public sealed class StoryEngine : IDisposable
 
         if (_settings.AutoTeleportOnWaypoint && TryAutoTeleport(bgr, grey, clientW, clientH))
         {
+            return;
+        }
+
+        if (_domainRequested)
+        {
+            _domainRequested = false;
+            FarmDomain();
             return;
         }
 
@@ -344,6 +378,22 @@ public sealed class StoryEngine : IDisposable
         {
             _walking = false;
             _cancelWalk = false;
+        }
+    }
+
+    private void FarmDomain()
+    {
+        StatusChanged?.Invoke("Domain farming (Ctrl+Alt+P stops)");
+        _domain ??= new DomainFarmer(() => _capture?.Grab(), () => _running && !_cancelDomain, line => Log?.Invoke(line), s => StatusChanged?.Invoke(s));
+        _cancelDomain = false;
+        try
+        {
+            _domain.Run(_hWnd, _input!);
+        }
+        finally
+        {
+            _cancelDomain = false;
+            Log?.Invoke($"Domain farming stopped after {_domain.Rounds} round(s)");
         }
     }
 
@@ -695,6 +745,7 @@ public sealed class StoryEngine : IDisposable
         _teleport?.Dispose();
         _autoTeleport?.Dispose();
         _walker?.Dispose();
+        _domain?.Dispose();
         foreach (var t in new[] { _talkUi, _optionIcon, _exclamationIcon, _chatPickF, _hangoutSkip, _pageClose, _guidingNotes, _chatHistory, _valiantChronicles, _paimonMenu, _mapScale, _mapSettings })
         {
             t.Dispose();

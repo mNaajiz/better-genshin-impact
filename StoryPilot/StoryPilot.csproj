@@ -27,6 +27,8 @@
 
   <ItemGroup>
     <None Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <!-- BetterGI's reward-tree model; not in git (copied from a BetterGI install, see README). -->
+    <None Include="Assets\Model\*.onnx" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Video I/O is never used; drop OpenCV's 27 MB ffmpeg plugin from the output. -->

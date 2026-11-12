@@ -1,0 +1,634 @@
+using OpenCvSharp;
+using Rect = OpenCvSharp.Rect;
+
+namespace StoryPilot.Engine;
+
+/// <summary>
+/// Domain farming, step 1 ("assisted"): StoryPilot enters the domain, walks to the key and starts it,
+/// you fight, then it finds the reward tree, walks to it, opens the reward pop-up and presses
+/// Continue Challenge, round after round. Same order as BetterGI's AutoDomainTask, without OCR.
+///
+/// Real input (SendInput), so the game must stay the window in front. While StoryPilot is moving,
+/// touching the keyboard or mouse stops it. During the fight (and while you pick the resin, until the
+/// resin pop-up is automated) your input is expected and ignored.
+/// </summary>
+public sealed class DomainFarmer : IDisposable
+{
+    private const int Middle = Vision.Width / 2;
+
+    /// <summary>Close enough to the screen centre to walk straight at the tree (frame px).</summary>
+    private const int TreeCentredPx = 30;
+
+    private static readonly TimeSpan WalkToKeyTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan FightTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan FindTreeTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan WalkToTreeTimeout = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan ResinPickTimeout = TimeSpan.FromMinutes(2);
+
+    private readonly Func<Mat?> _grab;
+    private readonly Func<bool> _keepGoing;
+    private readonly Action<string> _log;
+    private readonly Action<string> _status;
+
+    /// <summary>Yellow-circle button icon: Single Player Challenge, Start Challenge, Continue Challenge (BetterGI AutoFight/confirm.png).</summary>
+    private readonly Template _confirm = new("domain_confirm.png", new Rect(960, 540, 960, 540), 0.8, useAlpha: true);
+
+    /// <summary>Blue-cross button icon: Exit Domain (BetterGI AutoFight/exit.png).</summary>
+    private readonly Template _exit = new("domain_exit.png", new Rect(0, 540, 960, 540), 0.8, useAlpha: true);
+
+    /// <summary>Top-left icon shown inside a domain instead of the Paimon menu (BetterGI Element/in_domain.png).</summary>
+    private readonly Template _inDomain = new("in_domain.png", new Rect(0, 0, 480, 270), 0.8, useAlpha: true);
+
+    private readonly Template _pickF = new("chat_pick_f.png", new Rect(1090, 330, 60, 420));
+
+    /// <summary>"Challenge Completed" banner, made from your screenshot; until then you press Ctrl+Alt+D after the fight.</summary>
+    private readonly Template? _completed = Optional("domain_challenge_completed.png", new Rect(480, 135, 960, 405), 0.75);
+
+    private readonly HashSet<int> _held = [];
+    private TreeDetector? _tree;
+    private bool _treeLoadFailed;
+    private nint _hWnd;
+    private GameInput? _input;
+    private uint _inputBaseline;
+    private volatile bool _fightDone;
+
+    public enum Phase
+    {
+        Idle,
+        Entering,
+        WalkingToKey,
+        Fighting,
+        FindingTree,
+        Claiming,
+    }
+
+    public volatile Phase Current = Phase.Idle;
+
+    public int Rounds { get; private set; }
+
+    public DomainFarmer(Func<Mat?> grab, Func<bool> keepGoing, Action<string> log, Action<string> status)
+    {
+        _grab = grab;
+        _keepGoing = keepGoing;
+        _log = log;
+        _status = status;
+    }
+
+    /// <summary>Ctrl+Alt+D during the fight: the challenge is complete, go to the tree.</summary>
+    public void FightDone() => _fightDone = true;
+
+    /// <summary>
+    /// Start at the domain door (F prompt showing) or anywhere inside the domain before the key.
+    /// Runs until stopped, until something can't be found, or until you take over.
+    /// </summary>
+    public void Run(nint hWnd, GameInput input)
+    {
+        _hWnd = hWnd;
+        _input = input;
+        Rounds = 0;
+        if (!input.IsGameInFront)
+        {
+            _log("Domain: the game must be the window in front");
+            return;
+        }
+
+        WaitForHotkeyRelease();
+        try
+        {
+            if (!InsideDomain() && !Enter())
+            {
+                return;
+            }
+
+            while (_keepGoing())
+            {
+                if (!WalkToKey() || !Fight() || !FindTree() || !WalkToTree())
+                {
+                    return;
+                }
+
+                var next = ClaimAndContinue();
+                if (!next)
+                {
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            ReleaseAll();
+            Current = Phase.Idle;
+        }
+    }
+
+    // ----- 1. Enter -----
+
+    private bool Enter()
+    {
+        Current = Phase.Entering;
+        _status("Domain: entering");
+        if (!WaitFor(() => Has(_pickF), TimeSpan.FromSeconds(3)))
+        {
+            _log("Domain: stand at the domain door (F prompt showing) or inside the domain, then press Ctrl+Alt+D");
+            return false;
+        }
+
+        // Snezhnaya doors show a short list of choices on F; if the domain screen doesn't open, try the next one.
+        var opened = false;
+        for (var attempt = 0; attempt < 4 && !opened; attempt++)
+        {
+            Tap(Native.VK_F);
+            opened = WaitFor(() => Has(_confirm), TimeSpan.FromSeconds(3));
+            if (!opened && Has(_pickF))
+            {
+                _log("Domain: the door has several choices; trying the next one");
+                Native.SendWheel(-1);
+                Rebaseline();
+                Sleep(300);
+            }
+        }
+
+        if (!opened)
+        {
+            _log("Domain: the domain screen didn't open");
+            return false;
+        }
+
+        // Single Player Challenge, then Start Challenge on the party screen. Both carry the yellow-circle icon.
+        if (!ClickConfirm("Single Player Challenge") || !ClickConfirm("Start Challenge"))
+        {
+            return false;
+        }
+
+        _status("Domain: loading");
+        if (!WaitFor(InsideDomain, TimeSpan.FromSeconds(45)))
+        {
+            _log("Domain: didn't see the domain after loading");
+            return false;
+        }
+
+        // The objective / Ley Line Disorder note that opens on arrival closes with any click.
+        Sleep(1500);
+        ClickFrame(Middle, 800);
+        Sleep(800);
+        return true;
+    }
+
+    /// <summary>Wait for the yellow-circle button, click it, and wait for that screen to go away.</summary>
+    private bool ClickConfirm(string what)
+    {
+        Rect? button = null;
+        if (!WaitFor(() => (button = Find(_confirm)) != null, TimeSpan.FromSeconds(10)))
+        {
+            _log($"Domain: no {what} button");
+            return false;
+        }
+
+        Sleep(300);
+        ClickFrame(button!.Value.X + button.Value.Width / 2, button.Value.Y + button.Value.Height / 2);
+        _log($"Domain: {what}");
+        // The button disappears while the next screen loads.
+        WaitFor(() => !Has(_confirm), TimeSpan.FromSeconds(4));
+        Sleep(500);
+        return true;
+    }
+
+    // ----- 2. Walk to the key -----
+
+    /// <summary>The key is straight ahead of where every domain puts you. Hold W until its F prompt shows.</summary>
+    private bool WalkToKey()
+    {
+        Current = Phase.WalkingToKey;
+        _status($"Domain round {Rounds + 1}: walking to the key");
+        Hold(Native.VK_W, true);
+        var found = WaitFor(() => Has(_pickF), WalkToKeyTimeout);
+        Hold(Native.VK_W, false);
+        if (!found)
+        {
+            _log("Domain: didn't reach the key within 60 s");
+            return false;
+        }
+
+        Sleep(150);
+        Tap(Native.VK_F);
+        _log($"Domain round {Rounds + 1}: started");
+        return true;
+    }
+
+    // ----- 3. Fight (yours, for now) -----
+
+    private bool Fight()
+    {
+        Current = Phase.Fighting;
+        _fightDone = false;
+        _status(_completed == null
+            ? "Domain: your turn to fight. Press Ctrl+Alt+D when the challenge is complete."
+            : "Domain: your turn to fight. StoryPilot carries on after \"Challenge Completed\" (or Ctrl+Alt+D).");
+        var started = DateTime.Now;
+        while (DateTime.Now - started < FightTimeout)
+        {
+            if (!_keepGoing())
+            {
+                return false;
+            }
+
+            if (_fightDone || (_completed != null && Has(_completed)))
+            {
+                break;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        if (!_fightDone && (_completed == null || DateTime.Now - started >= FightTimeout))
+        {
+            _log("Domain: fight took over 10 minutes; stopping");
+            return false;
+        }
+
+        _log($"Domain: fight over after {(DateTime.Now - started).TotalSeconds:F0} s");
+        if (!WaitForHotkeyRelease())
+        {
+            return false;
+        }
+
+        // Let the banner and drops settle and the tree grow.
+        return Sleep(2500);
+    }
+
+    // ----- 4. Find the tree -----
+
+    /// <summary>
+    /// BetterGI's approach: reset the camera, keep it facing east (minimap view cone), and strafe left/right
+    /// until the tree model sees the tree in the middle of the screen.
+    /// </summary>
+    private bool FindTree()
+    {
+        Current = Phase.FindingTree;
+        _status("Domain: looking for the reward tree");
+        var tree = LoadTree();
+        if (tree == null)
+        {
+            return false;
+        }
+
+        Native.SendMiddleClick();
+        Rebaseline();
+        if (!Sleep(900))
+        {
+            return false;
+        }
+
+        var started = DateTime.Now;
+        var facingEast = 0;
+        var noTree = 0;
+        var lastSide = 0;
+        var flips = 0;
+        try
+        {
+            while (DateTime.Now - started < FindTreeTimeout)
+            {
+                if (!_keepGoing() || UserTookOver())
+                {
+                    _log("Domain: stopped while looking for the tree");
+                    return false;
+                }
+
+                using var frame = Grab1080();
+                if (frame == null)
+                {
+                    return false;
+                }
+
+                // Keep the camera facing east (0 degrees), turning in proportion to the error.
+                var angle = CameraAngle.Compute(frame);
+                if (angle is >= 356 or <= 4)
+                {
+                    facingEast++;
+                }
+                else
+                {
+                    facingEast = 0;
+                    var turn = angle <= 180 ? -(int)Math.Round(angle) : 360 - (int)Math.Round(angle);
+                    Native.MoveMouse(Math.Abs(turn) > 2 ? turn * 2 : turn, 0);
+                    Rebaseline();
+                }
+
+                if (facingEast < 3)
+                {
+                    Sleep(80);
+                    continue;
+                }
+
+                var box = tree.Detect(frame);
+                if (box == null)
+                {
+                    // Patrol: left for a while, then right.
+                    noTree++;
+                    lastSide = 0;
+                    Hold(noTree > 40 ? Native.VK_D : Native.VK_A, true);
+                    Hold(noTree > 40 ? Native.VK_A : Native.VK_D, false);
+                    Sleep(60);
+                    continue;
+                }
+
+                noTree = 0;
+                var r = box.Value;
+                var centre = r.X + r.Width / 2;
+                if (r.X + r.Width < Middle)
+                {
+                    Hold(Native.VK_D, false);
+                    Hold(Native.VK_A, true);
+                }
+                else if (r.X > Middle)
+                {
+                    Hold(Native.VK_A, false);
+                    Hold(Native.VK_D, true);
+                }
+                else
+                {
+                    Hold(Native.VK_A, false);
+                    Hold(Native.VK_D, false);
+                    if (Math.Abs(centre - Middle) <= TreeCentredPx || flips >= 5)
+                    {
+                        _log("Domain: tree ahead");
+                        return true;
+                    }
+
+                    // Small steps toward the centre; flipping back and forth means we're on it.
+                    var side = centre < Middle ? -1 : 1;
+                    if (lastSide != 0 && side != lastSide)
+                    {
+                        flips++;
+                    }
+
+                    lastSide = side;
+                    Tap(side < 0 ? Native.VK_A : Native.VK_D, 60);
+                }
+
+                Sleep(60);
+            }
+
+            _log("Domain: couldn't find the reward tree within 60 s");
+            return false;
+        }
+        finally
+        {
+            Hold(Native.VK_A, false);
+            Hold(Native.VK_D, false);
+        }
+    }
+
+    private TreeDetector? LoadTree()
+    {
+        if (_tree != null || _treeLoadFailed)
+        {
+            return _tree;
+        }
+
+        try
+        {
+            _tree = TreeDetector.TryLoad();
+            if (_tree == null)
+            {
+                _log($"Domain: the tree model is missing ({TreeDetector.ModelPath})");
+            }
+        }
+        catch (Exception e)
+        {
+            _log($"Domain: couldn't load the tree model: {e.Message}");
+        }
+
+        _treeLoadFailed = _tree == null;
+        return _tree;
+    }
+
+    // ----- 5. Walk to the tree -----
+
+    private bool WalkToTree()
+    {
+        _status("Domain: walking to the tree");
+        Hold(Native.VK_W, true);
+        var found = WaitFor(() => Has(_pickF), WalkToTreeTimeout);
+        Hold(Native.VK_W, false);
+        if (!found)
+        {
+            _log("Domain: didn't reach the tree");
+            return false;
+        }
+
+        Sleep(150);
+        Tap(Native.VK_F);
+        return true;
+    }
+
+    // ----- 6. Claim and continue -----
+
+    /// <summary>
+    /// Waits while you choose the resin in the pop-up (this part gets automated once the pop-up
+    /// template exists), then presses Continue Challenge on the result screen.
+    /// </summary>
+    private bool ClaimAndContinue()
+    {
+        Current = Phase.Claiming;
+        _status("Domain: choose the resin in the pop-up (condensed first)");
+        var started = DateTime.Now;
+        Rect? continueButton = null;
+        while (DateTime.Now - started < ResinPickTimeout)
+        {
+            if (!_keepGoing())
+            {
+                return false;
+            }
+
+            using var frame = Grab1080();
+            using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+            if (grey != null && Vision.Find(grey, _exit) != null)
+            {
+                continueButton = Vision.Find(grey, _confirm);
+                if (continueButton != null)
+                {
+                    break;
+                }
+            }
+
+            Thread.Sleep(300);
+        }
+
+        if (continueButton == null)
+        {
+            _log("Domain: no result screen after 2 minutes; stopping");
+            return false;
+        }
+
+        Rounds++;
+        _log($"Domain: round {Rounds} claimed");
+        Sleep(800);
+        Rebaseline();
+        var b = continueButton.Value;
+        ClickFrame(b.X + b.Width / 2, b.Y + b.Height / 2);
+        _status("Domain: next round, loading");
+        Sleep(2000);
+        if (!WaitFor(InsideDomain, TimeSpan.FromSeconds(45)))
+        {
+            _log("Domain: didn't get back into the domain (out of resin?)");
+            return false;
+        }
+
+        return Sleep(1500);
+    }
+
+    // ----- helpers -----
+
+    private bool InsideDomain()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey != null && Vision.Find(grey, _inDomain) != null && Vision.Find(grey, _confirm) == null;
+    }
+
+    private bool Has(Template t) => Find(t) != null;
+
+    private Rect? Find(Template t)
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey == null ? null : Vision.Find(grey, t);
+    }
+
+    /// <summary>Polls until the condition holds. False on timeout, stop, or when you take over.</summary>
+    private bool WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        var until = DateTime.Now + timeout;
+        while (DateTime.Now < until)
+        {
+            if (!_keepGoing() || UserTookOver())
+            {
+                return false;
+            }
+
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(100);
+        }
+
+        return false;
+    }
+
+    private bool Sleep(int ms)
+    {
+        var until = DateTime.Now.AddMilliseconds(ms);
+        while (DateTime.Now < until)
+        {
+            if (!_keepGoing())
+            {
+                return false;
+            }
+
+            Thread.Sleep(30);
+        }
+
+        return true;
+    }
+
+    private bool WaitForHotkeyRelease()
+    {
+        var until = DateTime.Now.AddSeconds(3);
+        while (Native.AnyKeyDown(0x11, 0x12, Native.VK_D) && DateTime.Now < until)
+        {
+            Thread.Sleep(30);
+        }
+
+        Thread.Sleep(150);
+        Rebaseline();
+        return _keepGoing();
+    }
+
+    private void ClickFrame(int x, int y)
+    {
+        Native.GetClientRect(_hWnd, out var rc);
+        _input!.ForegroundClick(x * rc.Width / Vision.Width, y * rc.Height / Vision.Height);
+        Rebaseline();
+    }
+
+    private void Hold(int vk, bool down)
+    {
+        if (down == _held.Contains(vk))
+        {
+            return;
+        }
+
+        Native.SendKey(vk, !down);
+        if (down)
+        {
+            _held.Add(vk);
+        }
+        else
+        {
+            _held.Remove(vk);
+        }
+
+        Rebaseline();
+    }
+
+    private void Tap(int vk, int holdMs = 40)
+    {
+        Native.SendKey(vk, false);
+        Thread.Sleep(holdMs);
+        Native.SendKey(vk, true);
+        Rebaseline();
+    }
+
+    private void ReleaseAll()
+    {
+        foreach (var vk in _held.ToList())
+        {
+            Native.SendKey(vk, true);
+        }
+
+        _held.Clear();
+        Rebaseline();
+    }
+
+    /// <summary>Our own SendInput also counts as "last input"; only input after this point is yours.</summary>
+    private void Rebaseline() => _inputBaseline = Native.LastInputTick();
+
+    private bool UserTookOver() => Native.GetForegroundWindow() != _hWnd || Native.LastInputTick() != _inputBaseline;
+
+    private Mat? Grab1080()
+    {
+        var raw = _grab();
+        if (raw == null || raw.Empty())
+        {
+            raw?.Dispose();
+            return null;
+        }
+
+        if (raw.Width == Vision.Width && raw.Height == Vision.Height)
+        {
+            return raw;
+        }
+
+        var resized = raw.Resize(new OpenCvSharp.Size(Vision.Width, Vision.Height), 0, 0, InterpolationFlags.Area);
+        raw.Dispose();
+        return resized;
+    }
+
+    private static Template? Optional(string file, Rect roi, double threshold)
+    {
+        return File.Exists(Path.Combine(AppContext.BaseDirectory, "Assets", file)) ? new Template(file, roi, threshold) : null;
+    }
+
+    public void Dispose()
+    {
+        _confirm.Dispose();
+        _exit.Dispose();
+        _inDomain.Dispose();
+        _pickF.Dispose();
+        _completed?.Dispose();
+        _tree?.Dispose();
+    }
+}

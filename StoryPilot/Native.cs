@@ -163,6 +163,27 @@ internal static class Native
         SendInput(1, [up], Marshal.SizeOf<INPUT>());
     }
 
+    private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+    private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+    private const uint MOUSEEVENTF_WHEEL = 0x0800;
+
+    /// <summary>Real middle click (resets the game camera behind the character), foreground only.</summary>
+    public static void SendMiddleClick()
+    {
+        var down = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_MIDDLEDOWN } };
+        var up = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_MIDDLEUP } };
+        SendInput(1, [down], Marshal.SizeOf<INPUT>());
+        Thread.Sleep(60);
+        SendInput(1, [up], Marshal.SizeOf<INPUT>());
+    }
+
+    /// <summary>Real mouse wheel notches (negative = down), foreground only.</summary>
+    public static void SendWheel(int notches)
+    {
+        var mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_WHEEL, mouseData = unchecked((uint)(notches * 120)) };
+        SendInput(1, [new INPUT { type = 0, mi = mi }], Marshal.SizeOf<INPUT>());
+    }
+
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(nint hWnd, int attribute, out RECT value, int size);
 }
