@@ -54,7 +54,7 @@ These are left out on purpose:
 
 - **No BitBlt capture.** BetterGI's BitBlt mode switches off Windows' "Optimizations for windowed games".
 - **No overlay window, desktop clone (RDP child session), FPS tracking (PresentMon) or hardware-monitor drivers.** These can slow down or disturb the display.
-- **No OCR or AI models** (Paddle OCR, ONNX, DirectML), so nothing extra runs on the GPU or CPU.
+- **No OCR and no GPU models** (Paddle OCR, ONNX Runtime, DirectML). The one exception is domain farming: it finds the reward tree with BetterGI's small tree model, run on the CPU through OpenCV, only while it's looking for the tree.
 - **Nothing is written to the registry or the game's settings.**
 
 The only files it writes:
@@ -77,6 +77,12 @@ You need the .NET 8 SDK.
 ```
 dotnet test StoryPilot.slnx
 dotnet publish StoryPilot/StoryPilot.csproj -c Release -o <output folder>
+```
+
+Domain farming needs BetterGI's reward-tree model, which isn't in git. Copy it from a BetterGI install with the script (it needs `pip install onnx`), before building. It puts the nodes in order so OpenCV can load the file:
+
+```
+python StoryPilot/tools/prepare_tree_model.py "<BetterGI folder>/Assets/Model/Domain/bgi_tree.onnx"
 ```
 
 ## Licence

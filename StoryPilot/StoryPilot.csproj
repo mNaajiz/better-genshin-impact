@@ -26,6 +26,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="StoryPilot.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
     <!-- BetterGI's reward-tree model; not in git (copied from a BetterGI install, see README). -->
     <None Include="Assets\Model\*.onnx" CopyToOutputDirectory="PreserveNewest" />

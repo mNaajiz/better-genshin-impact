@@ -34,7 +34,19 @@ public sealed class TreeDetector : IDisposable
             return null;
         }
 
-        return new TreeDetector(CvDnn.ReadNetFromOnnx(ModelPath) ?? throw new InvalidOperationException("Could not load the tree model"));
+        Net? net;
+        try
+        {
+            net = CvDnn.ReadNetFromOnnx(ModelPath);
+        }
+        catch (OpenCVException e)
+        {
+            // BetterGI's file lists its nodes out of order, which OpenCV rejects ("inputs.size() != 0").
+            throw new InvalidOperationException(
+                $"OpenCV couldn't read {ModelPath} ({e.Message}). Copy it with StoryPilot\\tools\\prepare_tree_model.py instead of copying the file as is.", e);
+        }
+
+        return new TreeDetector(net ?? throw new InvalidOperationException("Could not load the tree model"));
     }
 
     /// <summary>Best tree box in frame coordinates, or null.</summary>
