@@ -170,6 +170,19 @@ internal static class Native
         SendInput(1, [new INPUT { type = 0, mi = mi }], Marshal.SizeOf<INPUT>());
     }
 
+    private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+    private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+
+    /// <summary>Real right click at the cursor (dash in Genshin), foreground only.</summary>
+    public static void SendRightClick(int holdMs = 50)
+    {
+        var down = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_RIGHTDOWN } };
+        var up = new INPUT { type = 0, mi = new MOUSEINPUT { dwFlags = MOUSEEVENTF_RIGHTUP } };
+        SendInput(1, [down], Marshal.SizeOf<INPUT>());
+        Thread.Sleep(holdMs);
+        SendInput(1, [up], Marshal.SizeOf<INPUT>());
+    }
+
     private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
     private const uint MOUSEEVENTF_WHEEL = 0x0800;

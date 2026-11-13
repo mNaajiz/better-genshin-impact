@@ -277,9 +277,8 @@ public sealed class DomainFarmer : IDisposable
         Current = Phase.WalkingToKey;
         _status($"Domain round {Rounds + 1}: walking to the key");
         Hold(Native.VK_W, true);
-        Sleep(Rng.Next(80, 300));
-        Hold(Native.VK_SHIFT, true); // sprint
-        var found = WaitFor(() => Has(_pickF), WalkToKeyTimeout);
+        var sprint = StartSprint();
+        var found = WaitFor(() => { sprint(); return Has(_pickF); }, WalkToKeyTimeout);
         Hold(Native.VK_SHIFT, false);
         Hold(Native.VK_W, false);
         if (!found)
@@ -292,6 +291,33 @@ public sealed class DomainFarmer : IDisposable
         Tap(Native.VK_F);
         _log($"Domain round {Rounds + 1}: started");
         return true;
+    }
+
+    /// <summary>
+    /// Sprint one of two ways, picked at random per run: hold Shift, or keep dashing with right clicks
+    /// while holding W. Returns a tick to call in the walk loop (it does the dashes).
+    /// </summary>
+    private Action StartSprint()
+    {
+        Sleep(Rng.Next(80, 300));
+        if (Rng.Next(2) == 0)
+        {
+            Hold(Native.VK_SHIFT, true);
+            return () => { };
+        }
+
+        var nextDash = DateTime.Now;
+        return () =>
+        {
+            if (DateTime.Now < nextDash)
+            {
+                return;
+            }
+
+            Native.SendRightClick(Rng.Next(35, 80));
+            Rebaseline();
+            nextDash = DateTime.Now.AddMilliseconds(Rng.Next(650, 1100));
+        };
     }
 
     // ----- 3. Fight (yours, for now) -----
@@ -508,11 +534,15 @@ public sealed class DomainFarmer : IDisposable
                 break;
             case "e":
                 Tap(0x45);
-                CombatSleep(Vary(400));
+                CombatSleep(Vary(550));
                 break;
             case "q":
+                // A burst pressed while the skill animation is still playing is dropped (Bennett E then Q),
+                // so press again shortly after. A second press after the burst went off does nothing.
                 Tap(0x51);
-                CombatSleep(Vary(1300)); // burst animation
+                CombatSleep(Vary(300));
+                Tap(0x51);
+                CombatSleep(Vary(1100)); // burst animation
                 break;
             case "attack" when a.Seconds <= 0:
                 Native.SendLeftButton(true);
@@ -743,8 +773,7 @@ public sealed class DomainFarmer : IDisposable
         var started = DateTime.Now;
         var found = false;
         Hold(Native.VK_W, true);
-        Sleep(Rng.Next(80, 300));
-        Hold(Native.VK_SHIFT, true); // sprint
+        var sprint = StartSprint();
         try
         {
             while (DateTime.Now - started < WalkToTreeTimeout)
@@ -759,6 +788,8 @@ public sealed class DomainFarmer : IDisposable
                     found = true;
                     break;
                 }
+
+                sprint();
 
                 // Close up the tree fills the screen or drops out of view; then just keep walking.
                 var offset = tree == null ? null : TreeOffset(tree);
