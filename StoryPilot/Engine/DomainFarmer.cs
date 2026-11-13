@@ -597,8 +597,7 @@ public sealed class DomainFarmer : IDisposable
     // ----- 4. Find the tree -----
 
     /// <summary>
-    /// Get off Mavuika's bike (switch to another character), reset the camera behind the character, then
-    /// turn the camera until the tree model sees the tree in the middle of the screen. Turning instead of
+    /// Get off Mavuika's bike (switch to a random other character), then turn the camera until the tree model sees the tree in the middle of the screen. Turning instead of
     /// strafing: side-steps overshoot on the bike and the character ends up swaying left and right.
     /// </summary>
     private bool FindTree()
@@ -612,13 +611,9 @@ public sealed class DomainFarmer : IDisposable
         }
 
         Dismount();
-        Native.SendMiddleClick();
-        Rebaseline();
-        if (!Sleep(900))
-        {
-            return false;
-        }
 
+        // Look straight ahead first: the tree is often already in view, and the camera stays where it is.
+        // Only when it isn't seen for a moment does StoryPilot start turning to look for it.
         var started = DateTime.Now;
         var scans = 0;
         var centred = 0;
@@ -631,6 +626,12 @@ public sealed class DomainFarmer : IDisposable
             }
 
             var offset = TreeOffset(tree);
+            if (offset == null && DateTime.Now - started < TimeSpan.FromSeconds(1.5))
+            {
+                Sleep(100);
+                continue;
+            }
+
             if (offset == null)
             {
                 centred = 0;
@@ -693,13 +694,15 @@ public sealed class DomainFarmer : IDisposable
     /// </summary>
     private void Dismount()
     {
+        // Any other character, picked at random (Mavuika too, when she isn't the one on the bike).
         var active = ActiveSlot();
-        var target = active == 2 ? 3 : 2;
-        Sleep(1000);
+        var choices = Enumerable.Range(1, 4).Where(slot => slot != active).ToArray();
+        var target = choices[Rng.Next(choices.Length)];
+        Sleep(Vary(1000));
         for (var i = 0; i < 4 && ActiveSlot() != target; i++)
         {
             Tap(0x30 + target);
-            Sleep(600);
+            Sleep(Vary(600));
         }
     }
 

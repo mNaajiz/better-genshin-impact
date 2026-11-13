@@ -16,16 +16,20 @@ public sealed record CombatStep(int Slot, IReadOnlyList<CombatAction> Actions);
 /// 1: e
 /// 2: e
 /// 3: e, attack, attack, attack
-/// 4: q
+/// 4: e, q
 /// 1: q, attack(8)
 /// </code>
 /// </summary>
 public static class DomainCombat
 {
-    public const string DefaultRotation = "1: e\n2: e\n3: e, attack, attack, attack\n4: q\n1: q, attack(8)";
+    public const string DefaultRotation = "1: e\n2: e\n3: e, attack, attack, attack\n4: e, q\n1: q, attack(8)";
 
     /// <summary>Earlier defaults, replaced by <see cref="DefaultRotation"/> if you never edited them.</summary>
-    public static readonly string[] OldDefaults = ["1: e\n2: e\n3: e, attack(0.3)\n4: q\n1: q, attack(8)"];
+    public static readonly string[] OldDefaults =
+    [
+        "1: e\n2: e\n3: e, attack(0.3)\n4: q\n1: q, attack(8)",
+        "1: e\n2: e\n3: e, attack, attack, attack\n4: q\n1: q, attack(8)",
+    ];
 
     private static readonly HashSet<string> Known = ["e", "q", "attack", "charge", "wait", "dash", "jump", "w", "a", "s", "d"];
 
