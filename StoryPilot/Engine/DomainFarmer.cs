@@ -34,6 +34,8 @@ public sealed class DomainFarmer : IDisposable
     private readonly Template _confirm = new("domain_confirm.png", new Rect(960, 540, 960, 540), 0.8, useAlpha: true);
 
     /// <summary>Blue-cross button icon: Exit Domain (BetterGI AutoFight/exit.png).</summary>
+    private readonly Template _confirmAnywhere = new("domain_confirm.png", new Rect(0, 0, 1920, 1080), 0.8, useAlpha: true);
+
     private readonly Template _exit = new("domain_exit.png", new Rect(0, 540, 960, 540), 0.8, useAlpha: true);
 
     /// <summary>Top-left Leave Domain icon shown inside a domain instead of the Paimon menu (cut from your frame).</summary>
@@ -63,6 +65,14 @@ public sealed class DomainFarmer : IDisposable
     private uint _inputBaseline;
     private volatile bool _fightDone;
     private List<CombatStep>? _rotation;
+    private bool _useOriginal = true;
+
+    /// <summary>Condensed resin icon in the top bar of the tree pop-up and the reward screen (from your frames).</summary>
+    private readonly Template _condensedTop = new("resin_condensed_top.png", new Rect(900, 0, 900, 100), 0.85);
+
+    /// <summary>Count digits next to it. Condensed resin goes up to 5; 3 has no sample yet (reads as unknown).</summary>
+    private readonly (int Digit, Template T)[] _digits = new[] { 0, 1, 2, 4, 5 }
+        .Select(d => (d, new Template($"resin_digit_{d}.png", new Rect(0, 0, 1, 1), 0.85))).ToArray();
 
     public enum Phase
     {
@@ -93,8 +103,9 @@ public sealed class DomainFarmer : IDisposable
     /// Start at the domain door (F prompt showing) or anywhere inside the domain before the key.
     /// Runs until stopped, until something can't be found, or until you take over.
     /// </summary>
-    public void Run(nint hWnd, GameInput input, bool autoFight, string rotation)
+    public void Run(nint hWnd, GameInput input, bool autoFight, string rotation, bool useOriginalResin)
     {
+        _useOriginal = useOriginalResin;
         _hWnd = hWnd;
         _input = input;
         _rotation = null;
@@ -844,7 +855,10 @@ public sealed class DomainFarmer : IDisposable
             return ResinPick.NoPopup;
         }
 
-        foreach (var (row, name) in new[] { (_condensedRow, "condensed"), (_originalRow, "original") })
+        var rows = _useOriginal
+            ? new[] { (_condensedRow, "condensed"), (_originalRow, "original") }
+            : new[] { (_condensedRow, "condensed") };
+        foreach (var (row, name) in rows)
         {
             if (!_keepGoing())
             {
@@ -883,13 +897,64 @@ public sealed class DomainFarmer : IDisposable
         return ResinPick.OutOfResin;
     }
 
+    /// <summary>Condensed resin count from the top bar, or null when it can't be read.</summary>
+    private int? ReadCondensed()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        if (grey == null)
+        {
+            return null;
+        }
+
+        var icon = Vision.Find(grey, _condensedTop);
+        if (icon == null)
+        {
+            return null;
+        }
+
+        var area = new Rect(icon.Value.X + icon.Value.Width, 26, 60, 46);
+        int? best = null;
+        var bestScore = 0.0;
+        foreach (var (digit, t) in _digits)
+        {
+            var score = Vision.Score(grey, t, area);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = digit;
+            }
+        }
+
+        return bestScore >= 0.85 ? best : null;
+    }
+
+    /// <summary>Close any pop-up, then leave with the top-left Leave Domain button and confirm.</summary>
+    private void LeaveDomain()
+    {
+        Sleep(Vary(800));
+        ClickFrame(57, 44);
+        Rect? confirm = null;
+        if (WaitFor(() => (confirm = Find(_confirmAnywhere)) != null, TimeSpan.FromSeconds(3)))
+        {
+            Sleep(Vary(400));
+            ClickFrame(confirm!.Value.X + confirm.Value.Width / 2, confirm.Value.Y + confirm.Value.Height / 2);
+            _log("Domain: left the domain");
+        }
+        else
+        {
+            _log("Domain: couldn't find the Leave Domain confirmation; you're still in the domain");
+        }
+    }
+
     private bool ClaimAndContinue()
     {
         Current = Phase.Claiming;
         switch (PickResin())
         {
             case ResinPick.OutOfResin:
-                _log("Domain: no condensed or original resin left; stopping (you're still in the domain)");
+                _log(_useOriginal ? "Domain: no condensed or original resin left" : "Domain: no condensed resin left");
+                LeaveDomain();
                 return false;
             case ResinPick.NoPopup:
                 _status("Domain: choose the resin in the pop-up (condensed first)");
@@ -927,6 +992,24 @@ public sealed class DomainFarmer : IDisposable
 
         Rounds++;
         _log($"Domain: round {Rounds} claimed");
+        var condensedLeft = ReadCondensed();
+        if (condensedLeft == 0 && !_useOriginal)
+        {
+            _log("Domain: that was the last condensed resin; leaving the domain");
+            Sleep(Rng.Next(700, 2500));
+            using (var frame = Grab1080())
+            using (var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY))
+            {
+                var leave = grey == null ? null : Vision.Find(grey, _exit);
+                if (leave is { } l)
+                {
+                    ClickFrame(l.X + l.Width / 2 + 160, l.Y + l.Height / 2); // the Leave Domain button
+                }
+            }
+
+            return false;
+        }
+
         Sleep(800);
         Rebaseline();
         // A short, different pause before each next round, like reading the rewards.
@@ -1097,6 +1180,13 @@ public sealed class DomainFarmer : IDisposable
         _pickF.Dispose();
         _clickToClose.Dispose();
         _condensedRow.Dispose();
+        _condensedTop.Dispose();
+        _confirmAnywhere.Dispose();
+        foreach (var (_, t) in _digits)
+        {
+            t.Dispose();
+        }
+
         _originalRow.Dispose();
         _completed?.Dispose();
         _tree?.Dispose();

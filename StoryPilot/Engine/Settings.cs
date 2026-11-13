@@ -64,6 +64,9 @@ public sealed class Settings
     /// <summary>Domain fight rotation, one "slot: actions" step per line (see DomainCombat).</summary>
     public string DomainRotation { get; set; } = DomainCombat.DefaultRotation;
 
+    /// <summary>In domains, use original resin once condensed resin is gone (otherwise leave the domain then).</summary>
+    public bool DomainUseOriginalResin { get; set; } = true;
+
     /// <summary>How often the game is checked (ms). Higher = lighter on the laptop.</summary>
     public int TickMs { get; set; } = 250;
 

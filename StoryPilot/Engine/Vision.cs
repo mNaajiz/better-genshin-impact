@@ -92,6 +92,22 @@ public static class Vision
         return new Rect(roi.X + loc.X, roi.Y + loc.Y, t.Image.Width, t.Image.Height);
     }
 
+    /// <summary>Best match score of the template inside <paramref name="area"/> (its own ROI is ignored).</summary>
+    public static double Score(Mat grey, Template t, Rect area)
+    {
+        var roi = Clamp(area, grey);
+        if (roi.Width < t.Image.Width || roi.Height < t.Image.Height)
+        {
+            return 0;
+        }
+
+        using var part = new Mat(grey, roi);
+        using var result = new Mat();
+        Cv2.MatchTemplate(part, t.Image, result, TemplateMatchModes.CCoeffNormed);
+        Cv2.MinMaxLoc(result, out _, out var max);
+        return double.IsNaN(max) ? 0 : max;
+    }
+
     /// <summary>
     /// All non-overlapping matches above the threshold, up to maxCount.
     /// </summary>

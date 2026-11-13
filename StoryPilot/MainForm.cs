@@ -157,6 +157,7 @@ public sealed class MainForm : Form
         _more.Controls.Add(Check("Sprint all the way (uses more stamina)", _settings.WalkSprint, v => _settings.WalkSprint = v));
 
         _more.Controls.Add(Check("Fight automatically in domains (Ctrl+Alt+D)", _settings.DomainAutoFight, v => _settings.DomainAutoFight = v));
+        _more.Controls.Add(Check("Use original resin after condensed runs out", _settings.DomainUseOriginalResin, v => _settings.DomainUseOriginalResin = v));
         _more.Controls.Add(new Label { Text = "Domain rotation (slot: actions, one step per line)", AutoSize = true, Margin = new Padding(0, 4, 0, 0) });
         var rotation = new TextBox
         {

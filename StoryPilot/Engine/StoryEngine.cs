@@ -388,7 +388,7 @@ public sealed class StoryEngine : IDisposable
         _cancelDomain = false;
         try
         {
-            _domain.Run(_hWnd, _input!, _settings.DomainAutoFight, _settings.DomainRotation);
+            _domain.Run(_hWnd, _input!, _settings.DomainAutoFight, _settings.DomainRotation, _settings.DomainUseOriginalResin);
         }
         finally
         {
