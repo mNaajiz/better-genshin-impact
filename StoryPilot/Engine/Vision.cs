@@ -104,7 +104,7 @@ public static class Vision
         using var part = new Mat(grey, roi);
         using var result = new Mat();
         Cv2.MatchTemplate(part, t.Image, result, TemplateMatchModes.CCoeffNormed);
-        Cv2.MinMaxLoc(result, out _, out var max);
+        Cv2.MinMaxLoc(result, out double _, out double max);
         return double.IsNaN(max) ? 0 : max;
     }
 
