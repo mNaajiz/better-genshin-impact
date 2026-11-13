@@ -169,4 +169,19 @@ public class DomainTests
         Assert.Equal(3, xilonen.Slot);
         Assert.Equal(["e", "attack", "attack", "attack"], xilonen.Actions.Select(a => a.Name));
     }
+
+    [Fact]
+    public void VaryKeepsDelaysNearTheBaseButNeverIdentical()
+    {
+        var seen = new HashSet<int>();
+        for (var i = 0; i < 200; i++)
+        {
+            var v = DomainFarmer.Vary(1000);
+            Assert.InRange(v, 850, 1310);
+            seen.Add(v);
+        }
+
+        Assert.True(seen.Count > 50);
+        Assert.Equal(0, DomainFarmer.Vary(0));
+    }
 }

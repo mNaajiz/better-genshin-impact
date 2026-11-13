@@ -332,6 +332,13 @@ public sealed class DomainFarmer : IDisposable
             }
 
             RunStep(_rotation![step]);
+            if (Rng.NextDouble() < 0.3)
+            {
+                // A little camera drift now and then, as a hand on the mouse would.
+                Native.MoveMouse(Rng.Next(-60, 61), Rng.Next(-8, 9));
+                Rebaseline();
+            }
+
             step = (step + 1) % _rotation.Count;
         }
 
@@ -445,14 +452,14 @@ public sealed class DomainFarmer : IDisposable
             Tap(0x30 + slot);
             for (var i = 0; i < 5; i++)
             {
-                if (!CombatSleep(100))
+                if (!CombatSleep(Vary(100)))
                 {
                     return false;
                 }
 
                 if (ActiveSlot() == slot)
                 {
-                    return CombatSleep(150);
+                    return CombatSleep(Vary(150));
                 }
             }
         }
@@ -492,23 +499,23 @@ public sealed class DomainFarmer : IDisposable
         {
             case "e" when a.Hold:
                 Native.SendKey(0x45, false);
-                CombatSleep(ms > 0 ? ms : 900);
+                CombatSleep(Vary(ms > 0 ? ms : 900));
                 Native.SendKey(0x45, true);
-                CombatSleep(300);
+                CombatSleep(Vary(300));
                 break;
             case "e":
                 Tap(0x45);
-                CombatSleep(400);
+                CombatSleep(Vary(400));
                 break;
             case "q":
                 Tap(0x51);
-                CombatSleep(1300); // burst animation
+                CombatSleep(Vary(1300)); // burst animation
                 break;
             case "attack" when a.Seconds <= 0:
                 Native.SendLeftButton(true);
-                Thread.Sleep(50);
+                Thread.Sleep(Rng.Next(35, 75));
                 Native.SendLeftButton(false);
-                CombatSleep(250);
+                CombatSleep(Vary(250));
                 break;
             case "attack":
             {
@@ -516,9 +523,9 @@ public sealed class DomainFarmer : IDisposable
                 while (DateTime.Now < until && !FightInterrupted())
                 {
                     Native.SendLeftButton(true);
-                    Thread.Sleep(50);
+                    Thread.Sleep(Rng.Next(35, 75));
                     Native.SendLeftButton(false);
-                    Thread.Sleep(130);
+                    Thread.Sleep(Rng.Next(110, 200));
                 }
 
                 break;
@@ -526,26 +533,26 @@ public sealed class DomainFarmer : IDisposable
 
             case "charge":
                 Native.SendLeftButton(true);
-                CombatSleep(ms > 0 ? ms : 1000);
+                CombatSleep(Vary(ms > 0 ? ms : 1000));
                 Native.SendLeftButton(false);
-                CombatSleep(200);
+                CombatSleep(Vary(200));
                 break;
             case "wait":
-                CombatSleep(ms);
+                CombatSleep(Vary(ms));
                 break;
             case "dash":
                 Tap(Native.VK_SHIFT, 80);
-                CombatSleep(300);
+                CombatSleep(Vary(300));
                 break;
             case "jump":
                 Tap(Native.VK_SPACE);
-                CombatSleep(500);
+                CombatSleep(Vary(500));
                 break;
             case "w" or "a" or "s" or "d":
             {
                 var vk = a.Name[0] - 'a' + 0x41;
                 Native.SendKey(vk, false);
-                CombatSleep(ms > 0 ? ms : 300);
+                CombatSleep(Vary(ms > 0 ? ms : 300));
                 Native.SendKey(vk, true);
                 break;
             }
@@ -553,6 +560,11 @@ public sealed class DomainFarmer : IDisposable
 
         Rebaseline();
     }
+
+    private static readonly Random Rng = Random.Shared;
+
+    /// <summary>A delay with human spread: 85-125 % of the base plus up to 60 ms.</summary>
+    internal static int Vary(int ms) => ms <= 0 ? 0 : (int)(ms * (0.85 + Rng.NextDouble() * 0.4)) + Rng.Next(0, 61);
 
     private bool CombatSleep(int ms)
     {
@@ -628,7 +640,7 @@ public sealed class DomainFarmer : IDisposable
                 }
 
                 // Look around: about 30 degrees per step, a full turn in a dozen steps.
-                Native.MoveMouse(ScanTurnPx, 0);
+                Native.MoveMouse(ScanTurnPx + Rng.Next(-40, 41), Rng.Next(-3, 4));
                 Rebaseline();
                 Sleep(300);
                 continue;
@@ -877,6 +889,8 @@ public sealed class DomainFarmer : IDisposable
         _log($"Domain: round {Rounds} claimed");
         Sleep(800);
         Rebaseline();
+        // A short, different pause before each next round, like reading the rewards.
+        Sleep(Rng.Next(700, 3500));
         var b = continueButton.Value;
         ClickFrame(b.X + b.Width / 2, b.Y + b.Height / 2);
         _status("Domain: next round, loading");
@@ -887,7 +901,7 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        return Sleep(1500);
+        return Sleep(Vary(1500));
     }
 
     // ----- helpers -----
@@ -961,6 +975,7 @@ public sealed class DomainFarmer : IDisposable
 
     private void ClickFrame(int x, int y)
     {
+        (x, y) = OptionPicker.Wobble(x, y, 5, Rng);
         Native.GetClientRect(_hWnd, out var rc);
         _input!.ForegroundClick(x * rc.Width / Vision.Width, y * rc.Height / Vision.Height);
         Rebaseline();
@@ -989,7 +1004,7 @@ public sealed class DomainFarmer : IDisposable
     private void Tap(int vk, int holdMs = 40)
     {
         Native.SendKey(vk, false);
-        Thread.Sleep(holdMs);
+        Thread.Sleep(holdMs + Rng.Next(0, 45));
         Native.SendKey(vk, true);
         Rebaseline();
     }
