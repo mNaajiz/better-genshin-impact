@@ -139,4 +139,34 @@ public class DomainTests
     {
         Assert.Throws<FormatException>(() => DomainCombat.Parse(text));
     }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void ActiveSlotIsTheGreyNumberBox(int active)
+    {
+        using var grey = new Mat(1080, 1920, MatType.CV_8UC1, Scalar.All(100));
+        int[] ys = [276, 367, 458, 549];
+        for (var i = 0; i < 4; i++)
+        {
+            grey[new OpenCvSharp.Rect(1858, ys[i] - 14, 28, 28)].SetTo(Scalar.All(i + 1 == active ? 180 : 229));
+        }
+
+        Assert.Equal(active, DomainFarmer.ActiveSlotOf(grey));
+    }
+
+    [Fact]
+    public void ActiveSlotIsUnknownWhenAllBoxesLookAlike()
+    {
+        using var grey = new Mat(1080, 1920, MatType.CV_8UC1, Scalar.All(200));
+        Assert.Equal(0, DomainFarmer.ActiveSlotOf(grey));
+    }
+
+    [Fact]
+    public void XilonenAttacksThreeTimesInTheDefaultRotation()
+    {
+        var xilonen = DomainCombat.Parse(DomainCombat.DefaultRotation)[2];
+        Assert.Equal(3, xilonen.Slot);
+        Assert.Equal(["e", "attack", "attack", "attack"], xilonen.Actions.Select(a => a.Name));
+    }
 }

@@ -47,6 +47,14 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>"Challenge Completed" banner, made from your screenshot; until then you press Ctrl+Alt+D after the fight.</summary>
     private readonly Template? _completed = Optional("domain_challenge_completed.png", new Rect(480, 135, 960, 405), 0.75);
 
+    /// <summary>Resin icons on the left of the Petrified Tree pop-up rows (from your frame).</summary>
+    private readonly Template _condensedRow = new("resin_condensed_row.png", new Rect(540, 420, 200, 420), 0.85);
+
+    private readonly Template _originalRow = new("resin_original_row.png", new Rect(540, 420, 200, 420), 0.85);
+
+    /// <summary>Centre of the Use buttons in that pop-up.</summary>
+    private const int UseButtonX = 1266;
+
     private readonly HashSet<int> _held = [];
     private TreeDetector? _tree;
     private bool _treeLoadFailed;
@@ -291,14 +299,14 @@ public sealed class DomainFarmer : IDisposable
         _fightDone = false;
         var auto = _rotation != null;
         _status(auto
-            ? "Domain: fighting (press Ctrl+Alt+D when the challenge is complete)"
+            ? "Domain: fighting until Challenge Completed (Ctrl+Alt+D ends the fight early)"
             : _completed == null
                 ? "Domain: your turn to fight. Press Ctrl+Alt+D when the challenge is complete."
                 : "Domain: your turn to fight. StoryPilot carries on after \"Challenge Completed\" (or Ctrl+Alt+D).");
         var started = DateTime.Now;
         var timedOut = true;
         var step = 0;
-        var lastBannerCheck = DateTime.MinValue;
+        _bannerSeen = false;
         while (DateTime.Now - started < FightTimeout)
         {
             if (!_keepGoing())
@@ -306,13 +314,12 @@ public sealed class DomainFarmer : IDisposable
                 return false;
             }
 
-            if (_fightDone || (_completed != null && (DateTime.Now - lastBannerCheck).TotalMilliseconds >= 400 && Has(_completed)))
+            if (_fightDone || BannerSeen())
             {
                 timedOut = false;
                 break;
             }
 
-            lastBannerCheck = DateTime.Now;
             if (!auto)
             {
                 Thread.Sleep(500);
@@ -346,7 +353,33 @@ public sealed class DomainFarmer : IDisposable
     }
 
     /// <summary>Stops the fight when it is over, the app is stopped, or you pressed Ctrl+Alt+D.</summary>
-    private bool FightInterrupted() => _fightDone || !_keepGoing() || Native.GetForegroundWindow() != _hWnd;
+    private bool FightInterrupted() => _fightDone || !_keepGoing() || Native.GetForegroundWindow() != _hWnd || BannerSeen();
+
+    private DateTime _lastBannerCheck = DateTime.MinValue;
+    private bool _bannerSeen;
+
+    /// <summary>"Challenge Completed" on screen (checked at most twice a second, also mid-skill).</summary>
+    private bool BannerSeen()
+    {
+        if (_completed == null || _bannerSeen)
+        {
+            return _bannerSeen;
+        }
+
+        if ((DateTime.Now - _lastBannerCheck).TotalMilliseconds < 500)
+        {
+            return false;
+        }
+
+        _lastBannerCheck = DateTime.Now;
+        _bannerSeen = Has(_completed);
+        if (_bannerSeen)
+        {
+            _log("Domain: Challenge Completed");
+        }
+
+        return _bannerSeen;
+    }
 
     /// <summary>Real input goes to whichever window is in front, so pause while the game isn't.</summary>
     private bool WaitUntilGameInFront()
@@ -370,7 +403,7 @@ public sealed class DomainFarmer : IDisposable
 
         if (warned)
         {
-            _status("Domain: fighting (press Ctrl+Alt+D when the challenge is complete)");
+            _status("Domain: fighting until Challenge Completed (Ctrl+Alt+D ends the fight early)");
         }
 
         return true;
@@ -378,8 +411,7 @@ public sealed class DomainFarmer : IDisposable
 
     private void RunStep(CombatStep step)
     {
-        Tap(0x30 + step.Slot); // number key: switch character (no-op if already active)
-        if (!CombatSleep(350))
+        if (!SwitchTo(step.Slot))
         {
             return;
         }
@@ -393,6 +425,64 @@ public sealed class DomainFarmer : IDisposable
 
             RunAction(a);
         }
+    }
+
+    /// <summary>
+    /// Press the slot's number key until that character is the active one. The game ignores a switch for
+    /// about a second after the last one, so a single press can be lost after a quick skill.
+    /// The active slot's number box on the right turns grey.
+    /// </summary>
+    private bool SwitchTo(int slot)
+    {
+        if (ActiveSlot() == slot)
+        {
+            return true;
+        }
+
+        var until = DateTime.Now.AddSeconds(3);
+        while (DateTime.Now < until)
+        {
+            Tap(0x30 + slot);
+            for (var i = 0; i < 5; i++)
+            {
+                if (!CombatSleep(100))
+                {
+                    return false;
+                }
+
+                if (ActiveSlot() == slot)
+                {
+                    return CombatSleep(150);
+                }
+            }
+        }
+
+        _log($"Domain: couldn't switch to slot {slot}");
+        return !FightInterrupted();
+    }
+
+    /// <summary>Slot (1-4) whose number box is grey, or 0 when it can't tell.</summary>
+    private int ActiveSlot()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey == null ? 0 : ActiveSlotOf(grey);
+    }
+
+    internal static int ActiveSlotOf(Mat grey)
+    {
+        int[] ys = [276, 367, 458, 549];
+        var means = new double[ys.Length];
+        for (var i = 0; i < ys.Length; i++)
+        {
+            using var box = new Mat(grey, new Rect(1860, ys[i] - 12, 24, 24));
+            means[i] = Cv2.Mean(box).Val0;
+        }
+
+        var min = means.Min();
+        var index = Array.IndexOf(means, min);
+        var others = means.Where((_, i) => i != index).Min();
+        return others - min >= 12 ? index + 1 : 0;
     }
 
     private void RunAction(CombatAction a)
@@ -413,6 +503,12 @@ public sealed class DomainFarmer : IDisposable
             case "q":
                 Tap(0x51);
                 CombatSleep(1300); // burst animation
+                break;
+            case "attack" when a.Seconds <= 0:
+                Native.SendLeftButton(true);
+                Thread.Sleep(50);
+                Native.SendLeftButton(false);
+                CombatSleep(250);
                 break;
             case "attack":
             {
@@ -658,10 +754,77 @@ public sealed class DomainFarmer : IDisposable
     /// Waits while you choose the resin in the pop-up (this part gets automated once the pop-up
     /// template exists), then presses Continue Challenge on the result screen.
     /// </summary>
+    private enum ResinPick
+    {
+        Used,
+        OutOfResin,
+        NoPopup,
+    }
+
+    /// <summary>
+    /// The Petrified Tree pop-up lists one row per way to pay, each with its icon on the left and a Use
+    /// button on the right. Use condensed resin first, then original resin. The primogem row is never touched.
+    /// A row that doesn't work (none left) leaves the pop-up open, so the next row is tried.
+    /// </summary>
+    private ResinPick PickResin()
+    {
+        if (!WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(5)))
+        {
+            return ResinPick.NoPopup;
+        }
+
+        foreach (var (row, name) in new[] { (_condensedRow, "condensed"), (_originalRow, "original") })
+        {
+            if (!_keepGoing())
+            {
+                return ResinPick.NoPopup;
+            }
+
+            var icon = Find(row);
+            if (icon == null)
+            {
+                continue;
+            }
+
+            var y = icon.Value.Y + icon.Value.Height / 2;
+            ClickFrame(UseButtonX, y);
+            _log($"Domain: using {name} resin");
+            // Claimed: the pop-up closes and the rewards open. Not enough resin: it stays (maybe with a prompt on top).
+            if (WaitFor(() => !Has(_condensedRow) && !Has(_originalRow), TimeSpan.FromSeconds(3)))
+            {
+                return ResinPick.Used;
+            }
+
+            Tap(Native.VK_ESCAPE);
+            Sleep(600);
+            if (!Has(_condensedRow) && !Has(_originalRow))
+            {
+                // Esc closed the pop-up itself; open it again.
+                Tap(Native.VK_F);
+                if (!WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(3)))
+                {
+                    return ResinPick.NoPopup;
+                }
+            }
+        }
+
+        ClickFrame(1374, 276); // close the pop-up
+        return ResinPick.OutOfResin;
+    }
+
     private bool ClaimAndContinue()
     {
         Current = Phase.Claiming;
-        _status("Domain: choose the resin in the pop-up (condensed first)");
+        switch (PickResin())
+        {
+            case ResinPick.OutOfResin:
+                _log("Domain: no condensed or original resin left; stopping (you're still in the domain)");
+                return false;
+            case ResinPick.NoPopup:
+                _status("Domain: choose the resin in the pop-up (condensed first)");
+                break;
+        }
+
         var started = DateTime.Now;
         Rect? continueButton = null;
         while (DateTime.Now - started < ResinPickTimeout)
@@ -859,6 +1022,8 @@ public sealed class DomainFarmer : IDisposable
         _inDomain.Dispose();
         _pickF.Dispose();
         _clickToClose.Dispose();
+        _condensedRow.Dispose();
+        _originalRow.Dispose();
         _completed?.Dispose();
         _tree?.Dispose();
     }

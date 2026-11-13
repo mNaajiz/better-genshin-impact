@@ -84,6 +84,12 @@ public sealed class Settings
                     loaded.Version = CurrentVersion;
                 }
 
+                if (DomainCombat.OldDefaults.Contains(loaded.DomainRotation.Replace("\r", "")))
+                {
+                    // Xilonen needs three normal attacks after her E to start her buffs.
+                    loaded.DomainRotation = DomainCombat.DefaultRotation;
+                }
+
                 return loaded;
             }
         }
