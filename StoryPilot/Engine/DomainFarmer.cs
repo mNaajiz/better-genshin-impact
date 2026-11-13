@@ -17,7 +17,7 @@ public sealed class DomainFarmer : IDisposable
     private const int Middle = Vision.Width / 2;
 
     /// <summary>Close enough to the screen centre to walk straight at the tree (frame px).</summary>
-    private const int TreeCentredPx = 30;
+    private const int TreeCentredPx = 60;
 
     private static readonly TimeSpan WalkToKeyTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan FightTimeout = TimeSpan.FromMinutes(10);
@@ -585,8 +585,9 @@ public sealed class DomainFarmer : IDisposable
     // ----- 4. Find the tree -----
 
     /// <summary>
-    /// BetterGI's approach: reset the camera, keep it facing east (minimap view cone), and strafe left/right
-    /// until the tree model sees the tree in the middle of the screen.
+    /// Get off Mavuika's bike (switch to another character), reset the camera behind the character, then
+    /// turn the camera until the tree model sees the tree in the middle of the screen. Turning instead of
+    /// strafing: side-steps overshoot on the bike and the character ends up swaying left and right.
     /// </summary>
     private bool FindTree()
     {
@@ -598,6 +599,7 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
+        Dismount();
         Native.SendMiddleClick();
         Rebaseline();
         if (!Sleep(900))
@@ -606,102 +608,86 @@ public sealed class DomainFarmer : IDisposable
         }
 
         var started = DateTime.Now;
-        var facingEast = 0;
-        var noTree = 0;
-        var lastSide = 0;
-        var flips = 0;
-        try
+        var scans = 0;
+        var centred = 0;
+        while (DateTime.Now - started < FindTreeTimeout)
         {
-            while (DateTime.Now - started < FindTreeTimeout)
+            if (!_keepGoing() || UserTookOver())
             {
-                if (!_keepGoing() || UserTookOver())
-                {
-                    _log("Domain: stopped while looking for the tree");
-                    return false;
-                }
-
-                using var frame = Grab1080();
-                if (frame == null)
-                {
-                    return false;
-                }
-
-                // Keep the camera facing east (0 degrees), turning in proportion to the error.
-                var angle = CameraAngle.Compute(frame);
-                if (angle is >= 356 or <= 4)
-                {
-                    facingEast++;
-                }
-                else
-                {
-                    facingEast = 0;
-                    var turn = angle <= 180 ? -(int)Math.Round(angle) : 360 - (int)Math.Round(angle);
-                    Native.MoveMouse(Math.Abs(turn) > 2 ? turn * 2 : turn, 0);
-                    Rebaseline();
-                }
-
-                if (facingEast < 3)
-                {
-                    Sleep(80);
-                    continue;
-                }
-
-                var box = tree.Detect(frame);
-                if (box == null)
-                {
-                    // Patrol: left for a while, then right.
-                    noTree++;
-                    lastSide = 0;
-                    Hold(noTree > 40 ? Native.VK_D : Native.VK_A, true);
-                    Hold(noTree > 40 ? Native.VK_A : Native.VK_D, false);
-                    Sleep(60);
-                    continue;
-                }
-
-                noTree = 0;
-                var r = box.Value;
-                var centre = r.X + r.Width / 2;
-                if (r.X + r.Width < Middle)
-                {
-                    Hold(Native.VK_D, false);
-                    Hold(Native.VK_A, true);
-                }
-                else if (r.X > Middle)
-                {
-                    Hold(Native.VK_A, false);
-                    Hold(Native.VK_D, true);
-                }
-                else
-                {
-                    Hold(Native.VK_A, false);
-                    Hold(Native.VK_D, false);
-                    if (Math.Abs(centre - Middle) <= TreeCentredPx || flips >= 5)
-                    {
-                        _log("Domain: tree ahead");
-                        return true;
-                    }
-
-                    // Small steps toward the centre; flipping back and forth means we're on it.
-                    var side = centre < Middle ? -1 : 1;
-                    if (lastSide != 0 && side != lastSide)
-                    {
-                        flips++;
-                    }
-
-                    lastSide = side;
-                    Tap(side < 0 ? Native.VK_A : Native.VK_D, 60);
-                }
-
-                Sleep(60);
+                _log("Domain: stopped while looking for the tree");
+                return false;
             }
 
-            _log("Domain: couldn't find the reward tree within 60 s");
-            return false;
+            var offset = TreeOffset(tree);
+            if (offset == null)
+            {
+                centred = 0;
+                if (++scans > 24)
+                {
+                    break;
+                }
+
+                // Look around: about 30 degrees per step, a full turn in a dozen steps.
+                Native.MoveMouse(ScanTurnPx, 0);
+                Rebaseline();
+                Sleep(300);
+                continue;
+            }
+
+            if (Math.Abs(offset.Value) <= TreeCentredPx)
+            {
+                if (++centred >= 2)
+                {
+                    _log("Domain: tree ahead");
+                    return true;
+                }
+
+                Sleep(100);
+                continue;
+            }
+
+            centred = 0;
+            Native.MoveMouse(Math.Clamp((int)(offset.Value * TurnGain), -300, 300), 0);
+            Rebaseline();
+            Sleep(200);
         }
-        finally
+
+        _log("Domain: couldn't find the reward tree");
+        return false;
+    }
+
+    /// <summary>Mouse px per scan step while looking for the tree.</summary>
+    private const int ScanTurnPx = 250;
+
+    /// <summary>Mouse px per screen px of tree offset (turns a bit less than needed, then re-checks).</summary>
+    private const double TurnGain = 0.5;
+
+    /// <summary>Tree centre minus screen centre (frame px), or null when no tree is visible.</summary>
+    private int? TreeOffset(TreeDetector tree)
+    {
+        using var frame = Grab1080();
+        if (frame == null)
         {
-            Hold(Native.VK_A, false);
-            Hold(Native.VK_D, false);
+            return null;
+        }
+
+        var box = tree.Detect(frame);
+        return box == null ? null : box.Value.X + box.Value.Width / 2 - Middle;
+    }
+
+    /// <summary>
+    /// Switch to another character, which also ends special states like Mavuika's Flamestrider.
+    /// Waits out the switch cooldown first and retries until the switch shows.
+    /// </summary>
+    private void Dismount()
+    {
+        var active = ActiveSlot();
+        var target = active == 2 ? 3 : 2;
+        Sleep(1000);
+        for (var i = 0; i < 4 && ActiveSlot() != target; i++)
+        {
+            Tap(0x30 + target);
+            Sleep(600);
         }
     }
 
@@ -731,12 +717,45 @@ public sealed class DomainFarmer : IDisposable
 
     // ----- 5. Walk to the tree -----
 
+    /// <summary>Walk at the tree, nudging the camera to keep it in the middle, until its F prompt shows.</summary>
     private bool WalkToTree()
     {
         _status("Domain: walking to the tree");
+        var tree = LoadTree();
+        var started = DateTime.Now;
+        var found = false;
         Hold(Native.VK_W, true);
-        var found = WaitFor(() => Has(_pickF), WalkToTreeTimeout);
-        Hold(Native.VK_W, false);
+        try
+        {
+            while (DateTime.Now - started < WalkToTreeTimeout)
+            {
+                if (!_keepGoing() || UserTookOver())
+                {
+                    break;
+                }
+
+                if (Has(_pickF))
+                {
+                    found = true;
+                    break;
+                }
+
+                // Close up the tree fills the screen or drops out of view; then just keep walking.
+                var offset = tree == null ? null : TreeOffset(tree);
+                if (offset is { } o && Math.Abs(o) > TreeCentredPx)
+                {
+                    Native.MoveMouse(Math.Clamp((int)(o * TurnGain * 0.6), -120, 120), 0);
+                    Rebaseline();
+                }
+
+                Thread.Sleep(60);
+            }
+        }
+        finally
+        {
+            Hold(Native.VK_W, false);
+        }
+
         if (!found)
         {
             _log("Domain: didn't reach the tree");
