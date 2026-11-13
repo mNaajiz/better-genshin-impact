@@ -36,8 +36,8 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Blue-cross button icon: Exit Domain (BetterGI AutoFight/exit.png).</summary>
     private readonly Template _exit = new("domain_exit.png", new Rect(0, 540, 960, 540), 0.8, useAlpha: true);
 
-    /// <summary>Top-left icon shown inside a domain instead of the Paimon menu (BetterGI Element/in_domain.png).</summary>
-    private readonly Template _inDomain = new("in_domain.png", new Rect(0, 0, 480, 270), 0.8, useAlpha: true);
+    /// <summary>Top-left Leave Domain icon shown inside a domain instead of the Paimon menu (cut from your frame).</summary>
+    private readonly Template _inDomain = new("in_domain.png", new Rect(0, 0, 480, 270), 0.75);
 
     /// <summary>"Click anywhere to close" under the Ley Line Disorder note shown on arrival (from your screenshot).</summary>
     private readonly Template _clickToClose = new("domain_click_to_close.png", new Rect(700, 620, 520, 160), 0.8);
@@ -54,6 +54,7 @@ public sealed class DomainFarmer : IDisposable
     private GameInput? _input;
     private uint _inputBaseline;
     private volatile bool _fightDone;
+    private List<CombatStep>? _rotation;
 
     public enum Phase
     {
@@ -84,10 +85,24 @@ public sealed class DomainFarmer : IDisposable
     /// Start at the domain door (F prompt showing) or anywhere inside the domain before the key.
     /// Runs until stopped, until something can't be found, or until you take over.
     /// </summary>
-    public void Run(nint hWnd, GameInput input)
+    public void Run(nint hWnd, GameInput input, bool autoFight, string rotation)
     {
         _hWnd = hWnd;
         _input = input;
+        _rotation = null;
+        if (autoFight)
+        {
+            try
+            {
+                _rotation = DomainCombat.Parse(rotation);
+            }
+            catch (FormatException e)
+            {
+                _log($"Domain: {e.Message}");
+                return;
+            }
+        }
+
         Rounds = 0;
         if (!input.IsGameInFront)
         {
@@ -274,10 +289,16 @@ public sealed class DomainFarmer : IDisposable
     {
         Current = Phase.Fighting;
         _fightDone = false;
-        _status(_completed == null
-            ? "Domain: your turn to fight. Press Ctrl+Alt+D when the challenge is complete."
-            : "Domain: your turn to fight. StoryPilot carries on after \"Challenge Completed\" (or Ctrl+Alt+D).");
+        var auto = _rotation != null;
+        _status(auto
+            ? "Domain: fighting (press Ctrl+Alt+D when the challenge is complete)"
+            : _completed == null
+                ? "Domain: your turn to fight. Press Ctrl+Alt+D when the challenge is complete."
+                : "Domain: your turn to fight. StoryPilot carries on after \"Challenge Completed\" (or Ctrl+Alt+D).");
         var started = DateTime.Now;
+        var timedOut = true;
+        var step = 0;
+        var lastBannerCheck = DateTime.MinValue;
         while (DateTime.Now - started < FightTimeout)
         {
             if (!_keepGoing())
@@ -285,15 +306,30 @@ public sealed class DomainFarmer : IDisposable
                 return false;
             }
 
-            if (_fightDone || (_completed != null && Has(_completed)))
+            if (_fightDone || (_completed != null && (DateTime.Now - lastBannerCheck).TotalMilliseconds >= 400 && Has(_completed)))
             {
+                timedOut = false;
                 break;
             }
 
-            Thread.Sleep(500);
+            lastBannerCheck = DateTime.Now;
+            if (!auto)
+            {
+                Thread.Sleep(500);
+                continue;
+            }
+
+            if (!WaitUntilGameInFront())
+            {
+                return false;
+            }
+
+            RunStep(_rotation![step]);
+            step = (step + 1) % _rotation.Count;
         }
 
-        if (!_fightDone && (_completed == null || DateTime.Now - started >= FightTimeout))
+        ReleaseCombatInput();
+        if (timedOut)
         {
             _log("Domain: fight took over 10 minutes; stopping");
             return false;
@@ -307,6 +343,147 @@ public sealed class DomainFarmer : IDisposable
 
         // Let the banner and drops settle and the tree grow.
         return Sleep(2500);
+    }
+
+    /// <summary>Stops the fight when it is over, the app is stopped, or you pressed Ctrl+Alt+D.</summary>
+    private bool FightInterrupted() => _fightDone || !_keepGoing() || Native.GetForegroundWindow() != _hWnd;
+
+    /// <summary>Real input goes to whichever window is in front, so pause while the game isn't.</summary>
+    private bool WaitUntilGameInFront()
+    {
+        var warned = false;
+        while (Native.GetForegroundWindow() != _hWnd)
+        {
+            if (!_keepGoing() || _fightDone)
+            {
+                return _keepGoing();
+            }
+
+            if (!warned)
+            {
+                _status("Domain: paused, bring the game to the front to keep fighting");
+                warned = true;
+            }
+
+            Thread.Sleep(200);
+        }
+
+        if (warned)
+        {
+            _status("Domain: fighting (press Ctrl+Alt+D when the challenge is complete)");
+        }
+
+        return true;
+    }
+
+    private void RunStep(CombatStep step)
+    {
+        Tap(0x30 + step.Slot); // number key: switch character (no-op if already active)
+        if (!CombatSleep(350))
+        {
+            return;
+        }
+
+        foreach (var a in step.Actions)
+        {
+            if (FightInterrupted())
+            {
+                return;
+            }
+
+            RunAction(a);
+        }
+    }
+
+    private void RunAction(CombatAction a)
+    {
+        var ms = (int)(a.Seconds * 1000);
+        switch (a.Name)
+        {
+            case "e" when a.Hold:
+                Native.SendKey(0x45, false);
+                CombatSleep(ms > 0 ? ms : 900);
+                Native.SendKey(0x45, true);
+                CombatSleep(300);
+                break;
+            case "e":
+                Tap(0x45);
+                CombatSleep(400);
+                break;
+            case "q":
+                Tap(0x51);
+                CombatSleep(1300); // burst animation
+                break;
+            case "attack":
+            {
+                var until = DateTime.Now.AddMilliseconds(Math.Max(ms, 200));
+                while (DateTime.Now < until && !FightInterrupted())
+                {
+                    Native.SendLeftButton(true);
+                    Thread.Sleep(50);
+                    Native.SendLeftButton(false);
+                    Thread.Sleep(130);
+                }
+
+                break;
+            }
+
+            case "charge":
+                Native.SendLeftButton(true);
+                CombatSleep(ms > 0 ? ms : 1000);
+                Native.SendLeftButton(false);
+                CombatSleep(200);
+                break;
+            case "wait":
+                CombatSleep(ms);
+                break;
+            case "dash":
+                Tap(Native.VK_SHIFT, 80);
+                CombatSleep(300);
+                break;
+            case "jump":
+                Tap(Native.VK_SPACE);
+                CombatSleep(500);
+                break;
+            case "w" or "a" or "s" or "d":
+            {
+                var vk = a.Name[0] - 'a' + 0x41;
+                Native.SendKey(vk, false);
+                CombatSleep(ms > 0 ? ms : 300);
+                Native.SendKey(vk, true);
+                break;
+            }
+        }
+
+        Rebaseline();
+    }
+
+    private bool CombatSleep(int ms)
+    {
+        var until = DateTime.Now.AddMilliseconds(ms);
+        while (DateTime.Now < until)
+        {
+            if (FightInterrupted())
+            {
+                return false;
+            }
+
+            Thread.Sleep(20);
+        }
+
+        return true;
+    }
+
+    /// <summary>Make sure nothing stays pressed after the fight.</summary>
+    private void ReleaseCombatInput()
+    {
+        Native.SendLeftButton(false);
+        foreach (var vk in new[] { 0x45, Native.VK_W, Native.VK_A, Native.VK_S, Native.VK_D })
+        {
+            Native.SendKey(vk, true);
+        }
+
+        Rebaseline();
     }
 
     // ----- 4. Find the tree -----

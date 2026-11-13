@@ -101,11 +101,42 @@ public class DomainTests
     [Fact]
     public void DomainTemplatesLoad()
     {
-        foreach (var file in new[] { "domain_confirm.png", "domain_exit.png", "in_domain.png" })
+        foreach (var file in new[] { "domain_confirm.png", "domain_exit.png" })
         {
             using var t = new Template(file, new OpenCvSharp.Rect(0, 0, 1920, 1080), useAlpha: true);
             Assert.True(t.Image.Width > 20);
             Assert.NotNull(t.Mask);
         }
+    }
+
+    [Fact]
+    public void DefaultRotationIsYourMavuikaTeam()
+    {
+        var steps = DomainCombat.Parse(DomainCombat.DefaultRotation);
+        Assert.Equal([1, 2, 3, 4, 1], steps.Select(st => st.Slot));
+        Assert.Equal("q", steps[4].Actions[0].Name);
+        Assert.Equal(8, steps[4].Actions[1].Seconds);
+    }
+
+    [Fact]
+    public void RotationParsesHoldSecondsAndComments()
+    {
+        var steps = DomainCombat.Parse("// Zhongli\r\n2: e(hold), wait(0.2), charge(1.5)\n\n# end");
+        var step = Assert.Single(steps);
+        Assert.Equal(2, step.Slot);
+        Assert.True(step.Actions[0].Hold);
+        Assert.Equal(0.2, step.Actions[1].Seconds, 6);
+        Assert.Equal("charge", step.Actions[2].Name);
+    }
+
+    [Theory]
+    [InlineData("5: e")]
+    [InlineData("e, q")]
+    [InlineData("1: fly")]
+    [InlineData("1: wait(soon)")]
+    [InlineData("")]
+    public void BadRotationsSayWhatIsWrong(string text)
+    {
+        Assert.Throws<FormatException>(() => DomainCombat.Parse(text));
     }
 }

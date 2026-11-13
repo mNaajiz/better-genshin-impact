@@ -58,6 +58,12 @@ public sealed class Settings
     /// <summary>Delay before choosing an option, so you can read it (ms).</summary>
     public int OptionDelayMs { get; set; } = 0;
 
+    /// <summary>In domains, fight with <see cref="DomainRotation"/> instead of waiting for you.</summary>
+    public bool DomainAutoFight { get; set; } = true;
+
+    /// <summary>Domain fight rotation, one "slot: actions" step per line (see DomainCombat).</summary>
+    public string DomainRotation { get; set; } = DomainCombat.DefaultRotation;
+
     /// <summary>How often the game is checked (ms). Higher = lighter on the laptop.</summary>
     public int TickMs { get; set; } = 250;
 

@@ -163,6 +163,13 @@ internal static class Native
         SendInput(1, [up], Marshal.SizeOf<INPUT>());
     }
 
+    /// <summary>Real left button down or up at the cursor (charged attacks), foreground only.</summary>
+    public static void SendLeftButton(bool down)
+    {
+        var mi = new MOUSEINPUT { dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP };
+        SendInput(1, [new INPUT { type = 0, mi = mi }], Marshal.SizeOf<INPUT>());
+    }
+
     private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
     private const uint MOUSEEVENTF_WHEEL = 0x0800;

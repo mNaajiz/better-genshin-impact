@@ -156,6 +156,32 @@ public sealed class MainForm : Form
         _more.Controls.Add(Check("Sprint now and then while walking to the quest", _settings.WalkSprintBursts, v => _settings.WalkSprintBursts = v));
         _more.Controls.Add(Check("Sprint all the way (uses more stamina)", _settings.WalkSprint, v => _settings.WalkSprint = v));
 
+        _more.Controls.Add(Check("Fight automatically in domains (Ctrl+Alt+D)", _settings.DomainAutoFight, v => _settings.DomainAutoFight = v));
+        _more.Controls.Add(new Label { Text = "Domain rotation (slot: actions, one step per line)", AutoSize = true, Margin = new Padding(0, 4, 0, 0) });
+        var rotation = new TextBox
+        {
+            Multiline = true,
+            Text = _settings.DomainRotation.Replace("\r", "").Replace("\n", Environment.NewLine),
+            Width = 360,
+            Height = 96,
+            ScrollBars = ScrollBars.Vertical,
+            Font = new Font("Consolas", 9.5f),
+        };
+        rotation.Leave += (_, _) =>
+        {
+            try
+            {
+                DomainCombat.Parse(rotation.Text);
+                _settings.DomainRotation = rotation.Text;
+                _settings.Save();
+            }
+            catch (FormatException e)
+            {
+                _lastAction.Text = e.Message;
+            }
+        };
+        _more.Controls.Add(rotation);
+
         var save = new Button { Text = "Save screenshot of the game", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         save.Click += (_, _) =>
         {
