@@ -277,7 +277,10 @@ public sealed class DomainFarmer : IDisposable
         Current = Phase.WalkingToKey;
         _status($"Domain round {Rounds + 1}: walking to the key");
         Hold(Native.VK_W, true);
+        Sleep(Rng.Next(80, 300));
+        Hold(Native.VK_SHIFT, true); // sprint
         var found = WaitFor(() => Has(_pickF), WalkToKeyTimeout);
+        Hold(Native.VK_SHIFT, false);
         Hold(Native.VK_W, false);
         if (!found)
         {
@@ -586,7 +589,7 @@ public sealed class DomainFarmer : IDisposable
     private void ReleaseCombatInput()
     {
         Native.SendLeftButton(false);
-        foreach (var vk in new[] { 0x45, Native.VK_W, Native.VK_A, Native.VK_S, Native.VK_D })
+        foreach (var vk in new[] { 0x45, Native.VK_W, Native.VK_A, Native.VK_S, Native.VK_D, Native.VK_SHIFT })
         {
             Native.SendKey(vk, true);
         }
@@ -740,6 +743,8 @@ public sealed class DomainFarmer : IDisposable
         var started = DateTime.Now;
         var found = false;
         Hold(Native.VK_W, true);
+        Sleep(Rng.Next(80, 300));
+        Hold(Native.VK_SHIFT, true); // sprint
         try
         {
             while (DateTime.Now - started < WalkToTreeTimeout)
@@ -768,6 +773,7 @@ public sealed class DomainFarmer : IDisposable
         }
         finally
         {
+            Hold(Native.VK_SHIFT, false);
             Hold(Native.VK_W, false);
         }
 
