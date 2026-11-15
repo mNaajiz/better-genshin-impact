@@ -176,7 +176,7 @@ public sealed class DomainFarmer : IDisposable
         for (var attempt = 0; attempt < 4 && !opened; attempt++)
         {
             Tap(Native.VK_F);
-            opened = WaitFor(() => Has(_confirm), TimeSpan.FromSeconds(3));
+            opened = WaitFor(() => Has(_confirm), TimeSpan.FromSeconds(attempt == 0 ? 8 : 5));
             if (!opened && Has(_pickF))
             {
                 _log("Domain: the door has several choices; trying the next one");
@@ -214,7 +214,7 @@ public sealed class DomainFarmer : IDisposable
     /// </summary>
     private bool ArriveInDomain()
     {
-        var until = DateTime.Now.AddSeconds(45);
+        var until = DateTime.Now.AddSeconds(90); // slow loads happen
         var closed = false;
         while (DateTime.Now < until)
         {
@@ -264,20 +264,34 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Wait for the yellow-circle button, click it, and wait for that screen to go away.</summary>
     private bool ClickConfirm(string what)
     {
-        Rect? button = null;
-        if (!WaitFor(() => (button = Find(_confirm)) != null, TimeSpan.FromSeconds(10)))
+        for (var attempt = 1; attempt <= 4; attempt++)
         {
-            _log($"Domain: no {what} button");
-            return false;
+            // Screens can take a while to load; wait longer the first time.
+            Rect? button = null;
+            if (!WaitFor(() => (button = Find(_confirm)) != null, TimeSpan.FromSeconds(attempt == 1 ? 20 : 5)))
+            {
+                if (attempt == 1)
+                {
+                    _log($"Domain: no {what} button");
+                    return false;
+                }
+
+                // It went away after all: the last click worked.
+                return Sleep(500);
+            }
+
+            Sleep(Vary(300));
+            ClickFrame(button!.Value.X + button.Value.Width / 2, button.Value.Y + button.Value.Height / 2);
+            _log(attempt == 1 ? $"Domain: {what}" : $"Domain: {what} (try {attempt})");
+            // Done once the button disappears while the next screen loads; otherwise click again.
+            if (WaitFor(() => !Has(_confirm), TimeSpan.FromSeconds(4)))
+            {
+                return Sleep(500);
+            }
         }
 
-        Sleep(300);
-        ClickFrame(button!.Value.X + button.Value.Width / 2, button.Value.Y + button.Value.Height / 2);
-        _log($"Domain: {what}");
-        // The button disappears while the next screen loads.
-        WaitFor(() => !Has(_confirm), TimeSpan.FromSeconds(4));
-        Sleep(500);
-        return true;
+        _log($"Domain: {what} didn't respond after 4 clicks");
+        return false;
     }
 
     // ----- 2. Walk to the key -----
@@ -298,8 +312,12 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        Sleep(150);
-        Tap(Native.VK_F);
+        // Started when the key's F prompt goes away and stays away.
+        if (!Interact("the key", () => WaitFor(() => !Has(_pickF), TimeSpan.FromSeconds(2)) && Sleep(900) && !Has(_pickF)))
+        {
+            return false;
+        }
+
         _log($"Domain round {Rounds + 1}: started");
         return true;
     }
@@ -369,6 +387,14 @@ public sealed class DomainFarmer : IDisposable
             if (!WaitUntilGameInFront())
             {
                 return false;
+            }
+
+            // Still standing next to an unused key (the start didn't take): press F before fighting on.
+            if (Has(_pickF))
+            {
+                _log("Domain: the key is still waiting; pressing F");
+                Tap(Native.VK_F);
+                Sleep(Vary(600));
             }
 
             RunStep(_rotation![step]);
@@ -825,9 +851,61 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        Sleep(150);
-        Tap(Native.VK_F);
-        return true;
+        return Interact("the tree", () => WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(3)));
+    }
+
+    /// <summary>
+    /// Press F at the key or the tree and check it worked, up to 4 times. Sprinting or dashing often
+    /// carries the character past the spot, so the F prompt is gone by the time F is pressed:
+    /// then step back (and forward) in short taps until the prompt shows again.
+    /// </summary>
+    private bool Interact(string what, Func<bool> worked)
+    {
+        Sleep(Vary(250)); // let the run come to a stop
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            if (!_keepGoing())
+            {
+                return false;
+            }
+
+            if (!Has(_pickF) && !StepBackToPrompt())
+            {
+                _log($"Domain: lost the F prompt at {what}");
+                continue;
+            }
+
+            Tap(Native.VK_F);
+            if (worked())
+            {
+                return true;
+            }
+
+            _log($"Domain: {what} didn't react, trying again");
+        }
+
+        _log($"Domain: couldn't use {what} after 4 tries; stopping");
+        return false;
+    }
+
+    /// <summary>Short steps back, then forward, until the F prompt is on screen again.</summary>
+    private bool StepBackToPrompt()
+    {
+        foreach (var vk in new[] { Native.VK_S, Native.VK_S, Native.VK_S, Native.VK_S, Native.VK_W, Native.VK_W, Native.VK_W, Native.VK_W, Native.VK_W, Native.VK_W })
+        {
+            Tap(vk, Rng.Next(120, 200));
+            if (!Sleep(Vary(150)))
+            {
+                return false;
+            }
+
+            if (Has(_pickF))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // ----- 6. Claim and continue -----
@@ -1015,12 +1093,29 @@ public sealed class DomainFarmer : IDisposable
         // A short, different pause before each next round, like reading the rewards.
         Sleep(Rng.Next(700, 3500));
         var b = continueButton.Value;
-        ClickFrame(b.X + b.Width / 2, b.Y + b.Height / 2);
+        var left = false;
+        for (var attempt = 1; attempt <= 4 && !left; attempt++)
+        {
+            ClickFrame(b.X + b.Width / 2, b.Y + b.Height / 2);
+            // The reward screen closes once Continue registers.
+            left = WaitFor(() => !Has(_exit), TimeSpan.FromSeconds(4));
+            if (!left)
+            {
+                _log("Domain: Continue Challenge didn't register, clicking again");
+            }
+        }
+
+        if (!left)
+        {
+            _log("Domain: stuck on the reward screen; stopping");
+            return false;
+        }
+
         _status("Domain: next round, loading");
         Sleep(2000);
         if (!ArriveInDomain())
         {
-            _log("Domain: didn't get back into the domain (out of resin?)");
+            _log("Domain: didn't get back into the domain within 90 s");
             return false;
         }
 
