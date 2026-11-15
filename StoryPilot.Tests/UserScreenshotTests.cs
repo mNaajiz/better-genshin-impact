@@ -120,4 +120,40 @@ public class UserScreenshotTests
 
         Assert.Null(QuestTrail.Find(frame));
     }
+
+    [Fact]
+    public void MapOpenedWithQuestOffScreenShowsEdgeButtonAndStatue()
+    {
+        using var frame = Local("map_quest_button.png");
+        if (frame == null)
+        {
+            return;
+        }
+
+        using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
+        var button = MapVision.FindQuestButton(frame, grey);
+        Assert.NotNull(button);
+        Assert.True(MapVision.Distance(button!.Value, new Point(1776, 960)) <= 6, $"button at {button}");
+
+        using var vision = new MapVision();
+        var points = vision.FindTeleportPoints(frame, grey);
+        Assert.Contains(points, p => MapVision.Distance(p, new Point(617, 942)) <= 6); // Statue of The Seven
+        Assert.Contains(points, p => MapVision.Distance(p, new Point(364, 509)) <= 6); // waypoint
+    }
+
+    [Fact]
+    public void MapMovedToQuestHasQuestInTheMiddle()
+    {
+        using var frame = Local("map_on_quest.png");
+        if (frame == null)
+        {
+            return;
+        }
+
+        using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
+        Assert.Null(MapVision.FindQuestButton(frame, grey));
+        var quest = MapVision.FindQuestOnMap(frame, grey, MapVision.Centre, maxDistance: 250);
+        Assert.NotNull(quest);
+        Assert.True(MapVision.Distance(quest!.Value, new Point(959, 540)) <= 6, $"quest at {quest}");
+    }
 }

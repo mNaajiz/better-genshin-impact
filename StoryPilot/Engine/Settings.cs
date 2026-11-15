@@ -23,7 +23,7 @@ public sealed class Settings
     /// <summary>Bumped when a default changes, so older settings files pick up the new default once.</summary>
     public int Version { get; set; }
 
-    private const int CurrentVersion = 2;
+    private const int CurrentVersion = 3;
 
     /// <summary>Prefer orange quest options and "!" options over the default choice.</summary>
     public bool PreferQuestOptions { get; set; } = true;
@@ -34,8 +34,11 @@ public sealed class Settings
     /// <summary>Close item / tutorial pop-ups that appear right after dialogue.</summary>
     public bool ClosePopups { get; set; } = true;
 
-    /// <summary>After a story, teleport to the waypoint nearest the next quest step if it is far away.</summary>
-    public bool TeleportToNextQuest { get; set; } = false;
+    /// <summary>
+    /// After a quest part, open the map, move it to the quest (the map's quest button) and teleport to the
+    /// waypoint / statue nearest the next step, unless it is close by.
+    /// </summary>
+    public bool TeleportToNextQuest { get; set; } = true;
 
     /// <summary>Only teleport when the quest is at least this far (metres).</summary>
     public int TeleportMinDistanceMetres { get; set; } = 150;
@@ -84,8 +87,15 @@ public sealed class Settings
                 {
                     // Version 2: "Random" became the default option choice.
                     loaded.DefaultOption = OptionChoice.Random;
-                    loaded.Version = CurrentVersion;
                 }
+
+                if (loaded.Version < 3)
+                {
+                    // Version 3: travelling to the next quest part is on by default.
+                    loaded.TeleportToNextQuest = true;
+                }
+
+                loaded.Version = CurrentVersion;
 
                 if (DomainCombat.OldDefaults.Contains(loaded.DomainRotation.Replace("\r", "")))
                 {

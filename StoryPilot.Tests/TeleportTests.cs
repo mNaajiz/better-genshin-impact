@@ -143,6 +143,69 @@ public class TeleportTests
     }
 
     [Fact]
+    public void FindsQuestDiamondOnRealMapAndNoEdgeButton()
+    {
+        using var map = Data("map_snezhnaya.png");
+        using var grey = map.CvtColor(ColorConversionCodes.BGR2GRAY);
+
+        // The quest is on screen here, so the map shows no quest button at its edge.
+        Assert.Null(MapVision.FindQuestButton(map, grey));
+        var quest = MapVision.FindQuestOnMap(map, grey, MapVision.Centre);
+        Assert.NotNull(quest);
+        Assert.True(MapVision.Distance(quest!.Value, new Point(831, 411)) < 6, $"found at {quest}");
+    }
+
+    [Fact]
+    public void EdgeButtonIsADiamondOnADarkDisc()
+    {
+        using var map = new Mat(Vision.Height, Vision.Width, MatType.CV_8UC3);
+        Cv2.Randu(map, new Scalar(150, 120, 90), new Scalar(200, 170, 140));
+
+        void Diamond(Point c, int r)
+        {
+            var outline = new[] { new Point(c.X, c.Y - r), new Point(c.X + r, c.Y), new Point(c.X, c.Y + r), new Point(c.X - r, c.Y) };
+            Cv2.Polylines(map, new[] { outline }, true, new Scalar(10, 181, 240), 3);
+            var inner = new[] { new Point(c.X, c.Y - r / 2), new Point(c.X + r / 2, c.Y), new Point(c.X, c.Y + r / 2), new Point(c.X - r / 2, c.Y) };
+            Cv2.FillPoly(map, new[] { inner }, new Scalar(0, 233, 255));
+        }
+
+        Cv2.Circle(map, new Point(1775, 960), 34, new Scalar(40, 35, 30), -1);
+        Diamond(new Point(1775, 960), 19); // edge button
+        Diamond(new Point(700, 400), 20);  // a quest diamond on the map itself
+
+        using var grey = map.CvtColor(ColorConversionCodes.BGR2GRAY);
+        var button = MapVision.FindQuestButton(map, grey);
+        Assert.NotNull(button);
+        Assert.True(MapVision.Distance(button!.Value, new Point(1775, 960)) < 4, $"button at {button}");
+
+        var quest = MapVision.FindQuestOnMap(map, grey, MapVision.Centre);
+        Assert.NotNull(quest);
+        Assert.True(MapVision.Distance(quest!.Value, new Point(700, 400)) < 4, $"quest at {quest}");
+    }
+
+    [Fact]
+    public void FindsStatueAsTeleportPointAndRanksByQuestDistance()
+    {
+        using var map = new Mat(Vision.Height, Vision.Width, MatType.CV_8UC3);
+        Cv2.Randu(map, new Scalar(150, 120, 90), new Scalar(200, 170, 140));
+        using var statue = Cv2.ImRead(Path.Combine(AppContext.BaseDirectory, "Assets", "statue_on_map.png"), ImreadModes.Unchanged);
+        using var bgr = statue.CvtColor(ColorConversionCodes.BGRA2BGR);
+        using var alpha = statue.ExtractChannel(3);
+        using var mask = alpha.GreaterThan(128);
+        bgr.CopyTo(new Mat(map, new Rect(900 - statue.Width / 2, 700 - statue.Height / 2, statue.Width, statue.Height)), mask);
+
+        using var grey = map.CvtColor(ColorConversionCodes.BGR2GRAY);
+        using var vision = new MapVision();
+        var points = vision.FindTeleportPoints(map, grey);
+        Assert.Contains(points, p => MapVision.Distance(p, new Point(900, 700)) < 6);
+
+        var extra = new List<Point>(points) { new(1500, 300) };
+        var ranked = MapVision.RankTeleportPoints(extra, new Point(960, 650), player: null);
+        Assert.True(MapVision.Distance(ranked[0], new Point(900, 700)) < 6);
+        Assert.Empty(MapVision.RankTeleportPoints(extra, new Point(960, 650), player: new Point(950, 660)));
+    }
+
+    [Fact]
     public void NarrationNeedsBlackScreenWithCentredText()
     {
         using var narration = new Mat(Vision.Height, Vision.Width, MatType.CV_8UC1, Scalar.All(0));

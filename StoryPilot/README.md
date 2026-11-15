@@ -8,18 +8,18 @@ It only does story things:
   - Timing varies a little so it looks less mechanical: an extra 0–0.6 s before choosing, 0–0.3 s between dialogue lines, and clicks land a few pixels apart.
 - **Skip cutscenes**: clicks through black-screen narration and presses the hangout "Skip" button.
 - **Close pop-ups after dialogue**: item and tutorial pop-ups, and full-screen pages with an X.
-- **Teleport to next quest** (off by default): once a story dialogue ends and you're back in the normal view, it reads the quest distance under the quest name (e.g. "274m").
-  - If the quest is farther than the limit (150 m by default, set under More settings), it opens the quest on the map: J, then Navigate.
-  - It then teleports to the unlocked waypoint nearest the quest, but only if that waypoint is less than half as far from the quest as you are.
-  - Otherwise it closes the map and does nothing.
-  - Locked waypoints are skipped.
+- **Travel to next quest part** (on by default): once a quest part's dialogue ends and you're back in the normal view, it heads for the next part.
+  - If the quest distance under the quest name (e.g. "274m") is readable and under the limit (150 m by default, set under More settings), it stays put. If it can't be read, it checks on the map.
+  - It opens the map (M). If the quest is off screen, it clicks the round quest button at the map's edge (bottom right) so the map moves to the quest. If that button isn't there, it falls back to the quest menu (J, then Navigate).
+  - It then teleports to the unlocked waypoint or Statue of The Seven nearest the quest marker, but only if it is less than half as far from the quest as you are. Pins without a Teleport button are skipped (it tries up to four, nearest first), and pick lists of overlapping icons are handled.
+  - Otherwise it closes the map and does nothing. Locked waypoints are skipped.
   - Pressing Ctrl+Alt+P, or using the keyboard or mouse in the game, cancels it.
 - **Auto-teleport when I pick a waypoint** (on by default, separate from the story switches): on the big map, when you click a waypoint, Statue of The Seven, domain or other teleport point and its panel shows the Teleport button, StoryPilot presses it for you.
   - If several icons overlap and a pick list opens, it chooses the teleport waypoint row (or another teleport point if there's no waypoint).
   - It waits a moment first (100 ms by default, under More settings) so the panel can finish sliding in.
   - It only acts on the big map and only while the game is the window in front. It uses a real click and puts the mouse back.
 - **Walk to quest marker** (off by default; **Ctrl+Alt+W** starts or stops it any time while StoryPilot is running): turns the camera toward the tracked quest's marker and walks there.
-  - With the switch on, it starts by itself after a story ends, and after "Teleport to next quest" has teleported and the loading screen is over.
+  - With the switch on, it starts by itself after a story ends, and after "Travel to next quest part" has teleported and the loading screen is over.
   - The marker's icon changes (a small diamond, a door, …), but it always has the quest's colour, the same as the quest icon next to the quest name. StoryPilot reads that colour and looks for it in the game view. So gold (Archon), purple (Story) and blue (World) quests all work. The distance under the quest name is read in all three colours too.
   - It uses both the glowing quest trail on the ground and the marker. It presses V to show the trail at the start, and again whenever the trail has faded. The trail's direction comes from a line fitted through all of the trail ahead, so a trail the game draws zigzagging doesn't make it weave. Trail sparkles beside or behind your feet are ignored.
   - When the trail and the marker point roughly the same way (within about 25°), it leans toward the marker and cuts the corners. When they point very different ways (45° or more), it follows the trail, which is probably going round a wall or up some stairs. The nearer the quest, the more the marker counts: the trail counts most beyond about 120 m, and the marker under 30 m. With only one of them on screen, it uses that one.

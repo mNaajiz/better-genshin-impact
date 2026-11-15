@@ -12,8 +12,10 @@ namespace StoryPilot.Engine;
 public sealed class QuestTeleport(Func<Mat?> grab, Func<bool> keepGoing, Action<string> log) : IDisposable
 {
     private const int VK_J = 0x4A;
+    private const int VK_M = 0x4D;
 
     private readonly MapVision _map = new();
+    private readonly WaypointAutoTeleport _list = new();
 
     /// <summary>Set once posted clicks are seen not to work on the map; then only teleport with the game in front.</summary>
     private bool _backgroundClicksFail;
@@ -58,49 +60,29 @@ public sealed class QuestTeleport(Func<Mat?> grab, Func<bool> keepGoing, Action<
             metres = ReadQuestDistance(frame);
         }
 
-        if (metres == null)
-        {
-            log("Teleport: couldn't read the quest distance, skipping");
-            return Result.NotNeeded;
-        }
-
-        if (metres < minDistanceMetres)
+        if (metres != null && metres < minDistanceMetres)
         {
             log($"Quest is {metres} m away — close enough, no teleport");
             return Result.NotNeeded;
         }
 
-        log($"Quest is {metres} m away — looking for a waypoint");
-        input.Key(VK_J);
-        if (!Wait(1200))
+        log(metres != null
+            ? $"Quest is {metres} m away — opening the map"
+            : "Couldn't read the quest distance — checking on the map");
+
+        var quest = OpenMapOnQuest(input, clientW, clientH, out var cancelled);
+        if (cancelled)
         {
-            return Cancelled(input, mapOpen: false);
+            return Cancelled(input, mapOpen: true);
         }
 
-        // Quest menu: the bottom-right button is "Navigate" (or "Track" first if the quest isn't tracked).
-        var opened = false;
-        for (var attempt = 0; attempt < 2 && !opened; attempt++)
+        if (quest == null)
         {
-            Click(input, 1670, 1020, clientW, clientH);
-            if (!Wait(1500))
-            {
-                return Cancelled(input, mapOpen: true);
-            }
-
-            using var frame = Grab1080();
-            using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
-            opened = grey != null && _map.IsMapOpen(grey);
-        }
-
-        if (!opened)
-        {
-            NoteClickFailure(input);
-            log("Teleport: the map didn't open from the quest menu, giving up");
             BackToGame(input);
             return Result.GaveUp;
         }
 
-        Point? target;
+        List<Point> targets;
         using (var frame = Grab1080())
         {
             if (frame == null)
@@ -109,47 +91,223 @@ public sealed class QuestTeleport(Func<Mat?> grab, Func<bool> keepGoing, Action<
             }
 
             using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
-            var waypoints = _map.FindUnlockedWaypoints(frame, grey);
+            var points = _map.FindTeleportPoints(frame, grey);
             var player = MapVision.FindPlayer(frame);
-            target = MapVision.ChooseWaypoint(waypoints, MapVision.Centre, player);
-            if (target == null)
+            targets = MapVision.RankTeleportPoints(points, quest.Value, player);
+            if (targets.Count == 0)
             {
-                return CloseMap(input, waypoints.Count == 0
-                    ? "no unlocked waypoint near the quest"
-                    : "no waypoint is much closer than you already are");
+                if (points.Count > 0 && player != null)
+                {
+                    log("No teleport point is much closer to the quest than you already are");
+                    BackToGame(input);
+                    return Result.NotNeeded;
+                }
+
+                return CloseMap(input, "no unlocked waypoint or statue near the quest");
             }
         }
 
-        Click(input, target.Value.X, target.Value.Y, clientW, clientH);
-        if (!Wait(1000))
+        // Nearest first. A pin can turn out to be something else (no Teleport button): close its panel, try the next.
+        foreach (var target in targets.Take(4))
         {
-            return Cancelled(input, mapOpen: true);
-        }
+            Click(input, target.X, target.Y, clientW, clientH);
+            if (!Wait(1000))
+            {
+                return Cancelled(input, mapOpen: true);
+            }
 
-        var teleport = FindTeleportButton(input, clientW, clientH);
-        if (teleport == null)
-        {
-            NoteClickFailure(input);
-            return CloseMap(input, "the waypoint's Teleport button didn't appear");
-        }
+            var teleport = FindTeleportButton(input, clientW, clientH);
+            if (teleport == null)
+            {
+                if (!PanelOpen())
+                {
+                    // Nothing opened at all: the click didn't reach the map.
+                    NoteClickFailure(input);
+                    return CloseMap(input, "the map didn't react to the click");
+                }
 
-        Click(input, teleport.Value.X, teleport.Value.Y, clientW, clientH);
-        if (!Wait(2500))
-        {
-            return Result.Cancelled;
-        }
+                log("That point has no Teleport button, trying the next one");
+                input.Key(Native.VK_ESCAPE); // closes the side panel / list, the map stays
+                if (!Wait(700))
+                {
+                    return Cancelled(input, mapOpen: true);
+                }
 
-        using (var frame = Grab1080())
-        using (var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY))
-        {
-            if (grey != null && _map.IsMapOpen(grey))
+                if (!MapOpen())
+                {
+                    return Result.GaveUp;
+                }
+
+                continue;
+            }
+
+            Click(input, teleport.Value.X, teleport.Value.Y, clientW, clientH);
+            if (!Wait(2500))
+            {
+                return Result.Cancelled;
+            }
+
+            if (MapOpen())
             {
                 return CloseMap(input, "still on the map after pressing Teleport");
             }
+
+            log("Teleported to the point nearest the quest");
+            return Result.Teleported;
         }
 
-        log("Teleported to the waypoint nearest the quest");
-        return Result.Teleported;
+        return CloseMap(input, "none of the nearby points could be teleported to");
+    }
+
+    /// <summary>
+    /// Opens the big map with the tracked quest on screen and returns where the quest is.
+    /// M opens the map on the player; if the quest is off screen, the map shows a round quest button at its
+    /// edge (bottom right) which moves the map to the quest. Falls back to the quest menu (J → Navigate).
+    /// </summary>
+    private Point? OpenMapOnQuest(GameInput input, int clientW, int clientH, out bool cancelled)
+    {
+        cancelled = false;
+        input.Key(VK_M);
+        if (!WaitForMap(out cancelled) && !cancelled)
+        {
+            input.Key(VK_M);
+            WaitForMap(out cancelled);
+        }
+
+        if (cancelled)
+        {
+            return null;
+        }
+
+        for (var attempt = 0; attempt < 2 && MapOpen(); attempt++)
+        {
+            using (var frame = Grab1080())
+            {
+                if (frame == null)
+                {
+                    return null;
+                }
+
+                using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
+                if (MapVision.FindQuestButton(frame, grey) is not { } button)
+                {
+                    // No edge button: the quest is already on screen (or nothing is tracked).
+                    if (MapVision.FindQuestOnMap(frame, grey, MapVision.Centre) is { } onScreen)
+                    {
+                        log("Quest is on the map screen");
+                        return onScreen;
+                    }
+
+                    break;
+                }
+
+                log("Moving the map to the quest");
+                Click(input, button.X, button.Y, clientW, clientH);
+            }
+
+            // The map glides over to the quest.
+            if (!Wait(1600))
+            {
+                cancelled = true;
+                return null;
+            }
+
+            using (var frame = Grab1080())
+            {
+                if (frame == null)
+                {
+                    return null;
+                }
+
+                using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
+                if (MapVision.FindQuestOnMap(frame, grey, MapVision.Centre, maxDistance: 250) is { } quest)
+                {
+                    return quest;
+                }
+
+                if (MapVision.FindQuestButton(frame, grey) != null)
+                {
+                    NoteClickFailure(input); // the map didn't move; next attempt uses a real click if it can
+                }
+            }
+        }
+
+        // Fallback: quest menu → Navigate (or Track first), which also centres the map on the quest.
+        log("Quest button not found on the map, trying the quest menu");
+        BackToGame(input);
+        input.Key(VK_J);
+        if (!Wait(1200))
+        {
+            cancelled = true;
+            return null;
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            Click(input, 1670, 1020, clientW, clientH);
+            if (!Wait(1500))
+            {
+                cancelled = true;
+                return null;
+            }
+
+            if (MapOpen())
+            {
+                using var frame = Grab1080();
+                using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+                return frame != null && grey != null && MapVision.FindQuestOnMap(frame, grey, MapVision.Centre, maxDistance: 250) is { } quest
+                    ? quest
+                    : MapVision.Centre;
+            }
+        }
+
+        NoteClickFailure(input);
+        log("Teleport: couldn't get the map onto the quest, giving up");
+        return null;
+    }
+
+    private bool WaitForMap(out bool cancelled)
+    {
+        cancelled = false;
+        for (var i = 0; i < 6; i++)
+        {
+            if (!Wait(400))
+            {
+                cancelled = true;
+                return false;
+            }
+
+            if (MapOpen())
+            {
+                // Let the opening animation finish.
+                if (!Wait(500))
+                {
+                    cancelled = true;
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MapOpen()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey != null && _map.IsMapOpen(grey);
+    }
+
+    /// <summary>
+    /// A side panel or pick list is open: the map's own close (X) button is hidden then.
+    /// </summary>
+    private bool PanelOpen()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey != null && !_map.IsMapCloseVisible(grey);
     }
 
     private Point? FindTeleportButton(GameInput input, int clientW, int clientH)
@@ -166,10 +324,10 @@ public sealed class QuestTeleport(Func<Mat?> grab, Func<bool> keepGoing, Action<
             return button;
         }
 
-        // Overlapping icons open a pick list first.
-        if (_map.FindWaypointInList(grey) is { } row)
+        // Overlapping icons open a pick list first: choose its waypoint / statue / other teleport row.
+        if (_list.Decide(frame, grey) is { Kind: WaypointAutoTeleport.Kind.ClickListRow } row)
         {
-            Click(input, row.X + 60, row.Y, clientW, clientH);
+            Click(input, row.At.X, row.At.Y, clientW, clientH);
             if (!Wait(1000))
             {
                 return null;
@@ -309,5 +467,9 @@ public sealed class QuestTeleport(Func<Mat?> grab, Func<bool> keepGoing, Action<
         return resized;
     }
 
-    public void Dispose() => _map.Dispose();
+    public void Dispose()
+    {
+        _map.Dispose();
+        _list.Dispose();
+    }
 }

@@ -29,9 +29,17 @@ public sealed class MapVision : IDisposable
     private readonly Template _mapScale = new("map_scale_button.png", new Rect(30, 440, 40, 200), blackIsTransparent: true);
     private readonly Template _mapSettings = new("map_settings_button.png", new Rect(25, 990, 58, 62));
     private readonly Template _paimonMenu = new("paimon_menu.png", new Rect(0, 0, 480, 270));
+    private readonly Template _mapClose = new("map_close_button.png", new Rect(Vision.Width - 107, 19, 58, 58));
+    private readonly Template _statue = new("statue_on_map.png", new Rect(0, 0, Vision.Width, Vision.Height), threshold: 0.75, useAlpha: true);
+
+    // Quest diamond colours (OpenCV hue): gold (Archon), purple (story), blue (world).
+    private static readonly (int Lo, int Hi)[] QuestHues = [(14, 32), (125, 160), (95, 120)];
 
     /// <summary>The normal game view (Paimon icon top-left).</summary>
     public bool IsMainUi(Mat grey) => Vision.Find(grey, _paimonMenu) != null;
+
+    /// <summary>The map's own close (X) button, hidden while a side panel or pick list is open.</summary>
+    public bool IsMapCloseVisible(Mat grey) => Vision.Find(grey, _mapClose) != null;
 
     public bool IsMapOpen(Mat grey) => Vision.Find(grey, _mapScale) != null || Vision.Find(grey, _mapSettings) != null;
 
@@ -60,6 +68,129 @@ public sealed class MapVision : IDisposable
         }
 
         return list;
+    }
+
+    /// <summary>Unlocked waypoints and Statues of The Seven, i.e. map icons that can have a Teleport button.</summary>
+    public List<Point> FindTeleportPoints(Mat bgr, Mat grey)
+    {
+        var list = FindUnlockedWaypoints(bgr, grey);
+        foreach (var r in Vision.FindAll(grey, _statue, maxCount: 10))
+        {
+            var c = Centre_(r);
+            if (!UiAreas.Any(a => a.Contains(c)) && list.All(p => Distance(p, c) > 20))
+            {
+                list.Add(c);
+            }
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// The round quest button the big map shows at its edge (bottom right) while the tracked quest is off screen:
+    /// a quest-coloured diamond on a dark disc. Clicking it moves the map to the quest.
+    /// </summary>
+    public static Point? FindQuestButton(Mat bgr, Mat grey) =>
+        QuestDiamonds(bgr)
+            .Where(d => d.Centre.X >= 960 && d.Centre.Y >= 300 && RingBrightness(grey, d.Centre, 24) < 80)
+            .OrderByDescending(d => d.Centre.Y)
+            .Select(d => (Point?)d.Centre)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// The tracked quest's diamond on the map itself (not the edge button), nearest to <paramref name="near"/>.
+    /// </summary>
+    public static Point? FindQuestOnMap(Mat bgr, Mat grey, Point near, int maxDistance = int.MaxValue) =>
+        QuestDiamonds(bgr)
+            .Where(d => !UiAreas.Any(a => a.Contains(d.Centre)) && RingBrightness(grey, d.Centre, 24) >= 110)
+            .Where(d => Distance(d.Centre, near) <= maxDistance)
+            .OrderBy(d => Distance(d.Centre, near))
+            .Select(d => (Point?)d.Centre)
+            .FirstOrDefault();
+
+    /// <summary>Diamond-shaped blobs (outline + filled centre, empty corners) in a vivid quest colour.</summary>
+    internal static List<(Point Centre, int Pixels)> QuestDiamonds(Mat bgr)
+    {
+        var found = new List<(Point, int)>();
+        using var hsv = bgr.CvtColor(ColorConversionCodes.BGR2HSV);
+        using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
+        foreach (var (lo, hi) in QuestHues)
+        {
+            using var mask = new Mat();
+            Cv2.InRange(hsv, new Scalar(lo, 170, 185), new Scalar(hi, 255, 255), mask);
+            using var joined = new Mat();
+            Cv2.Dilate(mask, joined, kernel);
+            using var labels = new Mat();
+            using var stats = new Mat();
+            using var centroids = new Mat();
+            var n = Cv2.ConnectedComponentsWithStats(joined, labels, stats, centroids, PixelConnectivity.Connectivity8);
+            for (var i = 1; i < n; i++)
+            {
+                var box = new Rect(stats.At<int>(i, 0), stats.At<int>(i, 1), stats.At<int>(i, 2), stats.At<int>(i, 3));
+                if (box.Width is < 26 or > 60 || box.Height is < 26 or > 60 || box.Width > box.Height * 1.4 || box.Height > box.Width * 1.4)
+                {
+                    continue;
+                }
+
+                using var inBox = new Mat(mask, box);
+                var pixels = Cv2.CountNonZero(inBox);
+                if (pixels < 120)
+                {
+                    continue;
+                }
+
+                // A diamond leaves the four corners of its box empty (the player arrow and round icons don't).
+                int cw = box.Width / 4, ch = box.Height / 4, corners = 0;
+                foreach (var (x, y) in new[] { (0, 0), (box.Width - cw, 0), (0, box.Height - ch), (box.Width - cw, box.Height - ch) })
+                {
+                    using var corner = new Mat(inBox, new Rect(x, y, cw, ch));
+                    corners += Cv2.CountNonZero(corner);
+                }
+
+                if (corners > pixels * 0.08)
+                {
+                    continue;
+                }
+
+                found.Add((new Point(box.X + box.Width / 2, box.Y + box.Height / 2), pixels));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>Median grey level on a circle around a point (dark for the edge button's disc).</summary>
+    internal static int RingBrightness(Mat grey, Point c, int radius)
+    {
+        var values = new List<int>();
+        for (var i = 0; i < 48; i++)
+        {
+            var a = i * Math.PI * 2 / 48;
+            var x = (int)Math.Round(c.X + radius * Math.Cos(a));
+            var y = (int)Math.Round(c.Y + radius * Math.Sin(a));
+            if (x >= 0 && y >= 0 && x < grey.Width && y < grey.Height)
+            {
+                values.Add(grey.At<byte>(y, x));
+            }
+        }
+
+        if (values.Count == 0)
+        {
+            return 255;
+        }
+
+        values.Sort();
+        return values[values.Count / 2];
+    }
+
+    /// <summary>
+    /// Teleport points worth trying for a quest at <paramref name="quest"/>, nearest first: only those meaningfully
+    /// closer to the quest than the player already is (less than half the player's distance).
+    /// </summary>
+    public static List<Point> RankTeleportPoints(IReadOnlyList<Point> points, Point quest, Point? player)
+    {
+        var playerDistance = player is { } p ? Distance(p, quest) : double.MaxValue;
+        return points.Where(w => Distance(w, quest) < playerDistance * 0.5).OrderBy(w => Distance(w, quest)).ToList();
     }
 
     /// <summary>The bright cyan player arrow, if it is on screen.</summary>
@@ -153,5 +284,7 @@ public sealed class MapVision : IDisposable
         _mapScale.Dispose();
         _mapSettings.Dispose();
         _paimonMenu.Dispose();
+        _statue.Dispose();
+        _mapClose.Dispose();
     }
 }

@@ -62,7 +62,7 @@ public sealed class MainForm : Form
         body.Controls.Add(Check("Choose dialogue options", _settings.PickOptions, v => _settings.PickOptions = v));
         body.Controls.Add(Check("Skip cutscenes", _settings.SkipCutscenes, v => _settings.SkipCutscenes = v));
         body.Controls.Add(Check("Close pop-ups", _settings.ClosePopups, v => _settings.ClosePopups = v));
-        body.Controls.Add(Check("Teleport to next quest", _settings.TeleportToNextQuest, v => _settings.TeleportToNextQuest = v));
+        body.Controls.Add(Check("Travel to next quest part (teleport near it)", _settings.TeleportToNextQuest, v => _settings.TeleportToNextQuest = v));
         body.Controls.Add(Check("Auto-teleport when I pick a waypoint", _settings.AutoTeleportOnWaypoint, v => _settings.AutoTeleportOnWaypoint = v));
         body.Controls.Add(Check("Walk to quest marker after a story", _settings.WalkToQuestMarker, v => _settings.WalkToQuestMarker = v));
 
