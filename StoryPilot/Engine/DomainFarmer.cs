@@ -1258,18 +1258,21 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Original resin left (the number before "/ 200"), or null when it can't be read.</summary>
     private int? ReadOriginal(Mat grey)
     {
-        var max = Vision.Find(grey, _originalMax);
-        if (max == null)
+        // Anchor on the "200" of "NN / 200" (or "NN/200": the spacing differs between screens). With a full
+        // bar the count is 200 too, so take the right-most match.
+        var max = Vision.FindAll(grey, _originalMax, 3).OrderByDescending(r => r.X).FirstOrDefault();
+        if (max.Width == 0)
         {
             return null;
         }
 
-        return ReadNumber(grey, _digits, new Rect(max.Value.X - 70, max.Value.Y - 4, 68, max.Value.Height + 8), fromRight: true);
+        return ReadNumber(grey, _digits, new Rect(max.X - 90, max.Y - 4, 89, max.Height + 8), fromRight: true);
     }
 
     /// <summary>
-    /// Reads the white number nearest one end of the area, digit by digit. Null when any part of it isn't
-    /// one of the known digits (so a digit without a template never turns into a wrong number).
+    /// Reads the number made of the digits nearest one end of the area (the right end for "NN / 200", the left
+    /// for a count after an icon). A slash or an icon beside it is fine, but anything digit-sized that isn't a
+    /// known digit (3, 6, 7, 8, 9 have no image yet) makes it null rather than a wrong number.
     /// </summary>
     internal static int? ReadNumber(Mat grey, IReadOnlyList<(int Digit, Template T)> digits, Rect area, bool fromRight)
     {
@@ -1324,47 +1327,71 @@ public sealed class DomainFarmer : IDisposable
             }
         }
 
-        // The number: bright columns starting at one end, up to the first wide dark gap (an icon or "/").
+        if (kept.Count == 0)
+        {
+            return null;
+        }
+
+        // Chain neighbouring digits, starting from the one nearest the chosen end.
+        kept.Sort((p, q) => p.X.CompareTo(q.X));
+        var at = fromRight ? kept.Count - 1 : 0;
+        var chain = new List<(int X, float Score, int Digit, int Width)> { kept[at] };
+        while (chain.Count < 4)
+        {
+            var next = at + (fromRight ? -1 : 1);
+            if (next < 0 || next >= kept.Count)
+            {
+                break;
+            }
+
+            var (left, right) = fromRight ? (kept[next], kept[at]) : (kept[at], kept[next]);
+            var gap = right.X - (left.X + left.Width);
+            if (gap < -4 || gap > 8)
+            {
+                break;
+            }
+
+            chain.Add(kept[next]);
+            at = next;
+        }
+
+        chain.Sort((p, q) => p.X.CompareTo(q.X));
+        var lo = chain[0].X;
+        var hi = chain[^1].X + chain[^1].Width;
+
         using var bright = new Mat();
         Cv2.Threshold(roi, bright, 200, 255, ThresholdTypes.Binary);
         using var anyBright = new Mat();
         Cv2.Reduce(bright, anyBright, ReduceDimension.Row, ReduceTypes.Max, MatType.CV_8U);
         anyBright.GetArray<byte>(out var lit);
-        var group = new List<int>();
-        var gap = 0;
-        for (var i = 0; i < lit.Length; i++)
+
+        // Inside the number every lit column belongs to a recognised digit.
+        for (var c = Math.Max(0, lo); c < Math.Min(lit.Length, hi); c++)
         {
-            var c = fromRight ? lit.Length - 1 - i : i;
-            if (lit[c] > 0)
+            if (lit[c] > 0 && !chain.Any(k => c >= k.X - 2 && c <= k.X + k.Width + 2))
             {
-                group.Add(c);
-                gap = 0;
-            }
-            else if (group.Count > 0 && ++gap > 10)
-            {
-                break;
+                return null;
             }
         }
 
-        if (group.Count == 0)
+        // Right beside it: a slash (about 8 columns) is fine, an unknown digit (12 or more) is not.
+        int Lit(int from, int to)
+        {
+            var n = 0;
+            for (var c = Math.Max(0, from); c < Math.Min(lit.Length, to); c++)
+            {
+                n += lit[c] > 0 ? 1 : 0;
+            }
+
+            return n;
+        }
+
+        if (Lit(lo - 14, lo) > 9 || Lit(hi, hi + 14) > 9)
         {
             return null;
         }
 
-        int lo = group.Min(), hi = group.Max();
-        var inNumber = kept.Where(k => k.X >= lo - 3 && k.X <= hi).OrderBy(k => k.X).ToList();
-        if (inNumber.Count == 0 || inNumber.Count > 4)
-        {
-            return null;
-        }
-
-        // Every lit column of the number must be inside a recognised digit.
-        if (group.Any(c => !inNumber.Any(k => c >= k.X - 2 && c <= k.X + k.Width + 2)))
-        {
-            return null;
-        }
-
-        return inNumber.Aggregate(0, (n, k) => n * 10 + k.Digit);
+        return chain.Aggregate(0, (n, k) => n * 10 + k.Digit);
     }
 
     /// <summary>Close any pop-up, then leave with the top-left Leave Domain button and confirm.</summary>
@@ -1387,6 +1414,29 @@ public sealed class DomainFarmer : IDisposable
 
     /// <summary>The resin counts read after the last round, shown in the status line.</summary>
     private string? _resinCounts;
+
+    /// <summary>Keeps the reward screen whose original resin count couldn't be read, to fix the reading.</summary>
+    private void SaveUnreadFrame()
+    {
+        try
+        {
+            using var frame = Grab1080();
+            if (frame == null)
+            {
+                return;
+            }
+
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "StoryPilot");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"resin_unread_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            Cv2.ImWrite(path, frame);
+            _log($"Domain: couldn't read original resin; saved {Path.GetFileName(path)}");
+        }
+        catch (Exception e)
+        {
+            _log($"Domain: couldn't save the frame: {e.Message}");
+        }
+    }
 
     /// <summary>Original resin one domain round costs.</summary>
     private const int OriginalPerRound = 20;
@@ -1442,6 +1492,11 @@ public sealed class DomainFarmer : IDisposable
         {
             condensedLeft = grey == null ? null : ReadCondensed(grey);
             originalLeft = grey == null ? null : ReadOriginal(grey);
+        }
+
+        if (originalLeft == null)
+        {
+            SaveUnreadFrame();
         }
 
         var counts = $"condensed resin left: {condensedLeft?.ToString() ?? "?"}, original resin left: {originalLeft?.ToString() ?? "?"}";
