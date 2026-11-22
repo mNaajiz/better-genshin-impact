@@ -296,14 +296,38 @@ public sealed class DomainFarmer : IDisposable
 
     // ----- 2. Walk to the key -----
 
-    /// <summary>The key is straight ahead of where every domain puts you. Hold W until its F prompt shows.</summary>
+    /// <summary>
+    /// The key is straight ahead of where every domain puts you. Sprint the first stretch only, then walk
+    /// the rest: a sprint or a dash carries the character past the key and swallows the F press.
+    /// </summary>
     private bool WalkToKey()
     {
         Current = Phase.WalkingToKey;
         _status($"Domain round {Rounds + 1}: walking to the key");
         Hold(Native.VK_W, true);
         var sprint = StartSprint();
-        var found = WaitFor(() => { sprint(); return Has(_pickF); }, WalkToKeyTimeout);
+        var sprintUntil = DateTime.Now.AddMilliseconds(Rng.Next(1200, 2000));
+        var sprinting = true;
+        var found = WaitFor(() =>
+        {
+            if (Has(_pickF))
+            {
+                return true;
+            }
+
+            if (sprinting && DateTime.Now >= sprintUntil)
+            {
+                sprinting = false;
+                Hold(Native.VK_SHIFT, false);
+            }
+
+            if (sprinting)
+            {
+                sprint();
+            }
+
+            return false;
+        }, WalkToKeyTimeout);
         Hold(Native.VK_SHIFT, false);
         Hold(Native.VK_W, false);
         if (!found)
@@ -313,7 +337,7 @@ public sealed class DomainFarmer : IDisposable
         }
 
         // Started when the key's F prompt goes away and stays away.
-        if (!Interact("the key", () => WaitFor(() => !Has(_pickF), TimeSpan.FromSeconds(2)) && Sleep(900) && !Has(_pickF)))
+        if (!Interact("the key", () => WaitFor(() => !Has(_pickF), TimeSpan.FromSeconds(2)) && Sleep(900) && !Has(_pickF), settle: sprinting ? 450 : 80))
         {
             return false;
         }
@@ -670,7 +694,7 @@ public sealed class DomainFarmer : IDisposable
     /// Get off Mavuika's bike (switch to a random other character), then turn the camera until the tree model sees the tree in the middle of the screen. Turning instead of
     /// strafing: side-steps overshoot on the bike and the character ends up swaying left and right.
     /// </summary>
-    private bool FindTree()
+    private bool FindTree(bool dismount = true)
     {
         Current = Phase.FindingTree;
         _status("Domain: looking for the reward tree");
@@ -680,7 +704,10 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        Dismount();
+        if (dismount)
+        {
+            Dismount();
+        }
 
         // Look straight ahead first: the tree is often already in view, and the camera stays where it is.
         // Only when it isn't seen for a moment does StoryPilot start turning to look for it.
@@ -748,14 +775,15 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Tree centre minus screen centre (frame px), or null when no tree is visible.</summary>
     private int? TreeOffset(TreeDetector tree)
     {
-        using var frame = Grab1080();
-        if (frame == null)
-        {
-            return null;
-        }
-
-        var box = tree.Detect(frame);
+        var box = TreeBox(tree);
         return box == null ? null : box.Value.X + box.Value.Width / 2 - Middle;
+    }
+
+    /// <summary>The tree's box in frame px, or null when no tree is visible.</summary>
+    private OpenCvSharp.Rect? TreeBox(TreeDetector tree)
+    {
+        using var frame = Grab1080();
+        return frame == null ? null : tree.Detect(frame);
     }
 
     /// <summary>
@@ -802,17 +830,51 @@ public sealed class DomainFarmer : IDisposable
 
     // ----- 5. Walk to the tree -----
 
-    /// <summary>Walk at the tree, nudging the camera to keep it in the middle, until its F prompt shows.</summary>
+    /// <summary>
+    /// Walk straight at the tree until its F prompt shows. Sprints with Shift only (a dash can't be steered),
+    /// nudges the camera while the tree is only a little off, and stops to re-aim when it drifts further,
+    /// so the path doesn't curve off the edge of the platform. Losing the tree while it is still far away
+    /// stops the run and looks for it again.
+    /// </summary>
     private bool WalkToTree()
     {
         _status("Domain: walking to the tree");
         var tree = LoadTree();
         var started = DateTime.Now;
         var found = false;
-        Hold(Native.VK_W, true);
-        var sprint = StartSprint();
+        var walking = false;
+        var sprinting = Rng.Next(3) != 0; // mostly sprint, sometimes just run
+        var lastSeen = DateTime.Now;
+        var lastHeight = 0;
+        var reaims = 0;
+
+        void Go()
+        {
+            if (walking)
+            {
+                return;
+            }
+
+            Hold(Native.VK_W, true);
+            if (sprinting)
+            {
+                Sleep(Rng.Next(60, 200));
+                Hold(Native.VK_SHIFT, true);
+            }
+
+            walking = true;
+        }
+
+        void Stop()
+        {
+            Hold(Native.VK_SHIFT, false);
+            Hold(Native.VK_W, false);
+            walking = false;
+        }
+
         try
         {
+            Go();
             while (DateTime.Now - started < WalkToTreeTimeout)
             {
                 if (!_keepGoing() || UserTookOver())
@@ -826,23 +888,61 @@ public sealed class DomainFarmer : IDisposable
                     break;
                 }
 
-                sprint();
-
-                // Close up the tree fills the screen or drops out of view; then just keep walking.
-                var offset = tree == null ? null : TreeOffset(tree);
-                if (offset is { } o && Math.Abs(o) > TreeCentredPx)
+                // Close to the tree it fills the screen or drops out of view: stop sprinting and walk on.
+                var box = tree == null ? null : TreeBox(tree);
+                if (box is { } b)
                 {
-                    Native.MoveMouse(Math.Clamp((int)(o * TurnGain * 0.6), -120, 120), 0);
-                    Rebaseline();
+                    lastSeen = DateTime.Now;
+                    lastHeight = b.Height;
+                    if (b.Height > CloseTreeHeight && sprinting)
+                    {
+                        sprinting = false;
+                        Hold(Native.VK_SHIFT, false);
+                    }
+
+                    var offset = b.X + b.Width / 2 - Middle;
+                    if (Math.Abs(offset) > ReaimPx && reaims < 6)
+                    {
+                        // Too far off to fix on the move: stand still and turn until it is centred again.
+                        reaims++;
+                        Stop();
+                        _log($"Domain: drifting off the tree ({offset:+#;-#} px), re-aiming");
+                        if (!AimAtTree(tree!))
+                        {
+                            return false;
+                        }
+
+                        Go();
+                        continue;
+                    }
+
+                    if (Math.Abs(offset) > SteerDeadPx)
+                    {
+                        Native.MoveMouse(Math.Clamp((int)(offset * TurnGain), -200, 200), 0);
+                        Rebaseline();
+                    }
+                }
+                else if (tree != null && lastHeight < CloseTreeHeight && DateTime.Now - lastSeen > TimeSpan.FromSeconds(1.2))
+                {
+                    // Lost it while still far away: the run is going somewhere else. Stop and look again.
+                    Stop();
+                    _log("Domain: lost sight of the tree on the way, looking again");
+                    if (reaims++ >= 6 || !FindTree(dismount: false))
+                    {
+                        return false;
+                    }
+
+                    lastSeen = DateTime.Now;
+                    Go();
+                    continue;
                 }
 
-                Thread.Sleep(60);
+                Thread.Sleep(40);
             }
         }
         finally
         {
-            Hold(Native.VK_SHIFT, false);
-            Hold(Native.VK_W, false);
+            Stop();
         }
 
         if (!found)
@@ -851,7 +951,56 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        return Interact("the tree", () => WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(3)));
+        return Interact("the tree", () => WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(3)), settle: 150);
+    }
+
+    /// <summary>Tree box taller than this (frame px) means it is close: walk, and don't worry if it leaves the view.</summary>
+    private const int CloseTreeHeight = 520;
+
+    /// <summary>Tree offset (frame px) that stops the run to re-aim.</summary>
+    private const int ReaimPx = 160;
+
+    /// <summary>Tree offset (frame px) below which the run isn't steered at all.</summary>
+    private const int SteerDeadPx = 25;
+
+    /// <summary>Standing still, turn until the tree is centred (twice in a row). False if it can't be seen.</summary>
+    private bool AimAtTree(TreeDetector tree)
+    {
+        Sleep(Vary(250)); // come to a stop first
+        var centred = 0;
+        var missed = 0;
+        for (var i = 0; i < 20 && _keepGoing(); i++)
+        {
+            var offset = TreeOffset(tree);
+            if (offset == null)
+            {
+                if (++missed >= 4)
+                {
+                    return FindTree(dismount: false);
+                }
+
+                Sleep(100);
+                continue;
+            }
+
+            if (Math.Abs(offset.Value) <= TreeCentredPx / 2)
+            {
+                if (++centred >= 2)
+                {
+                    return true;
+                }
+
+                Sleep(80);
+                continue;
+            }
+
+            centred = 0;
+            Native.MoveMouse(Math.Clamp((int)(offset.Value * TurnGain), -300, 300), 0);
+            Rebaseline();
+            Sleep(Vary(180));
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -859,9 +1008,9 @@ public sealed class DomainFarmer : IDisposable
     /// carries the character past the spot, so the F prompt is gone by the time F is pressed:
     /// then step back (and forward) in short taps until the prompt shows again.
     /// </summary>
-    private bool Interact(string what, Func<bool> worked)
+    private bool Interact(string what, Func<bool> worked, int settle = 250)
     {
-        Sleep(Vary(250)); // let the run come to a stop
+        Sleep(Vary(settle)); // let the run come to a stop (short after walking, longer after a sprint or dash)
         for (var attempt = 1; attempt <= 4; attempt++)
         {
             if (!_keepGoing())
