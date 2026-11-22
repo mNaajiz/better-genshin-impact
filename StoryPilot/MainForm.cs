@@ -94,6 +94,7 @@ public sealed class MainForm : Form
 
         _toggle.Click += (_, _) => Toggle();
         _engine.Log += line => BeginInvokeSafe(() => _lastAction.Text = $"Last: {line} ({DateTime.Now:HH:mm:ss})");
+        _engine.Log += WriteLogLine;
         _engine.StatusChanged += s => BeginInvokeSafe(() => _status.Text = s);
         _statsTimer.Tick += (_, _) => _stats.Text = _engine.IsRunning
             ? _engine.DomainRunning ? $"Domain rounds {_engine.DomainRounds}" : $"Lines skipped {_engine.Advanced} · Options chosen {_engine.OptionsPicked} · Cutscenes/pop-ups {_engine.Skipped}"
@@ -216,6 +217,37 @@ public sealed class MainForm : Form
             _engine.Start();
             _toggle.Text = "Stop";
             _toggle.BackColor = StopColor;
+        }
+    }
+
+    /// <summary>%APPDATA%\StoryPilot\log.txt: every "Last:" line with its time, so a run can be checked afterwards.</summary>
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StoryPilot", "log.txt");
+
+    private static readonly object LogLock = new();
+
+    private static void WriteLogLine(string line)
+    {
+        try
+        {
+            lock (LogLock)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+                // Keep it small: start over once it passes 2 MB.
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 2_000_000)
+                {
+                    File.Delete(LogPath);
+                }
+
+                File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}{Environment.NewLine}");
+            }
+        }
+        catch (IOException)
+        {
+            // Logging must never stop the bot.
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
