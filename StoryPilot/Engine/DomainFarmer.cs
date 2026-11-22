@@ -47,6 +47,9 @@ public sealed class DomainFarmer : IDisposable
     private readonly Template _pickF = new("chat_pick_f.png", new Rect(1090, 330, 60, 420));
 
     /// <summary>"Challenge Completed" banner, made from your screenshot; until then you press Ctrl+Alt+D after the fight.</summary>
+    // The challenge has started: the "Defeat N opponent(s) within ... second(s)" banner, or the stopwatch over the timer at the top.
+    private readonly Template? _defeatBanner = Optional("domain_defeat.png", new Rect(300, 180, 1320, 170), 0.8);
+    private readonly Template? _timer = Optional("domain_timer.png", new Rect(720, 0, 480, 135), 0.7, useAlpha: true);
     private readonly Template? _completed = Optional("domain_challenge_completed.png", new Rect(480, 135, 960, 405), 0.75);
 
     /// <summary>Resin icons on the left of the Petrified Tree pop-up rows (from your frame).</summary>
@@ -336,14 +339,48 @@ public sealed class DomainFarmer : IDisposable
             return false;
         }
 
-        // Started when the key's F prompt goes away and stays away.
-        if (!Interact("the key", () => WaitFor(() => !Has(_pickF), TimeSpan.FromSeconds(2)) && Sleep(900) && !Has(_pickF), settle: sprinting ? 450 : 80))
+        if (!Interact("the key", KeyStarted, settle: sprinting ? 450 : 80))
         {
             return false;
         }
 
         _log($"Domain round {Rounds + 1}: started");
         return true;
+    }
+
+    /// <summary>
+    /// After F at the key: the challenge started once the "Defeat ..." banner or the timer shows up. If neither
+    /// shows, the F prompt being gone isn't enough (the run may just have carried past the key): step back,
+    /// and if the prompt is there again, the key wasn't used.
+    /// </summary>
+    private bool KeyStarted()
+    {
+        if (WaitFor(ChallengeRunning, TimeSpan.FromSeconds(4)))
+        {
+            return true;
+        }
+
+        if (Has(_pickF))
+        {
+            return false;
+        }
+
+        if (_defeatBanner == null && _timer == null)
+        {
+            return true; // no templates: the prompt staying gone is all there is to go on
+        }
+
+        // Neither banner nor timer, prompt gone: check whether the key is just behind us.
+        return !StepBackToPrompt();
+    }
+
+    private bool ChallengeRunning()
+    {
+        using var frame = Grab1080();
+        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
+        return grey != null
+            && ((_defeatBanner != null && Vision.Find(grey, _defeatBanner) != null)
+                || (_timer != null && Vision.Find(grey, _timer) != null));
     }
 
     /// <summary>
@@ -1411,9 +1448,9 @@ public sealed class DomainFarmer : IDisposable
         return resized;
     }
 
-    private static Template? Optional(string file, Rect roi, double threshold)
+    private static Template? Optional(string file, Rect roi, double threshold, bool useAlpha = false)
     {
-        return File.Exists(Path.Combine(AppContext.BaseDirectory, "Assets", file)) ? new Template(file, roi, threshold) : null;
+        return File.Exists(Path.Combine(AppContext.BaseDirectory, "Assets", file)) ? new Template(file, roi, threshold, useAlpha: useAlpha) : null;
     }
 
     public void Dispose()
@@ -1424,6 +1461,8 @@ public sealed class DomainFarmer : IDisposable
         _pickF.Dispose();
         _clickToClose.Dispose();
         _condensedRow.Dispose();
+        _defeatBanner?.Dispose();
+        _timer?.Dispose();
         _condensedTop.Dispose();
         _confirmAnywhere.Dispose();
         foreach (var (_, t) in _digits)

@@ -101,7 +101,7 @@ public class DomainTests
     [Fact]
     public void DomainTemplatesLoad()
     {
-        foreach (var file in new[] { "domain_confirm.png", "domain_exit.png" })
+        foreach (var file in new[] { "domain_confirm.png", "domain_exit.png", "domain_timer.png" })
         {
             using var t = new Template(file, new OpenCvSharp.Rect(0, 0, 1920, 1080), useAlpha: true);
             Assert.True(t.Image.Width > 20);
@@ -193,5 +193,12 @@ public class DomainTests
             using var t = new Template(file, new OpenCvSharp.Rect(0, 0, 1920, 1080));
             Assert.True(t.Image.Height >= 20);
         }
+    }
+
+    [Fact]
+    public void ChallengeStartedBannerLoads()
+    {
+        using var t = new Template("domain_defeat.png", new OpenCvSharp.Rect(0, 0, 1920, 1080));
+        Assert.True(t.Image.Width > 80);
     }
 }
