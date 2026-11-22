@@ -945,7 +945,7 @@ public sealed class DomainFarmer : IDisposable
                     }
 
                     var offset = b.X + b.Width / 2 - Middle;
-                    if (Math.Abs(offset) > ReaimPx && reaims < 6)
+                    if (Math.Abs(offset) > ReaimPx && reaims < 6 && b.Height < CloseTreeHeight)
                     {
                         // Too far off to fix on the move: stand still and turn until it is centred again.
                         reaims++;
