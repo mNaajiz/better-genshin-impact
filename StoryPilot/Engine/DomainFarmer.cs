@@ -759,6 +759,13 @@ public sealed class DomainFarmer : IDisposable
                 return false;
             }
 
+            // Already standing at the tree (the fight often ends right next to it): nothing to look for.
+            if (Has(_pickF))
+            {
+                _log("Domain: already at the tree");
+                return true;
+            }
+
             var offset = TreeOffset(tree);
             if (offset == null && DateTime.Now - started < TimeSpan.FromSeconds(1.5))
             {
@@ -1008,6 +1015,11 @@ public sealed class DomainFarmer : IDisposable
         var missed = 0;
         for (var i = 0; i < 20 && _keepGoing(); i++)
         {
+            if (Has(_pickF))
+            {
+                return true;
+            }
+
             var offset = TreeOffset(tree);
             if (offset == null)
             {
