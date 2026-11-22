@@ -966,7 +966,7 @@ public sealed class DomainFarmer : IDisposable
                         Rebaseline();
                     }
                 }
-                else if (tree != null && lastHeight < CloseTreeHeight && DateTime.Now - lastSeen > TimeSpan.FromSeconds(1.2))
+                else if (tree != null && lastHeight < CloseTreeHeight && DateTime.Now - lastSeen > TimeSpan.FromSeconds(3))
                 {
                     // Lost it while still far away: the run is going somewhere else. Stop and look again.
                     Stop();
