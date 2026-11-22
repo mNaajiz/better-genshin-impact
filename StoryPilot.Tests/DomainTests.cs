@@ -188,7 +188,7 @@ public class DomainTests
     [Fact]
     public void ResinCountTemplatesLoad()
     {
-        foreach (var file in new[] { "resin_condensed_top.png", "resin_digit_0.png", "resin_digit_1.png", "resin_digit_2.png", "resin_digit_4.png", "resin_digit_5.png" })
+        foreach (var file in new[] { "resin_condensed_top.png", "resin_digit_0.png", "resin_digit_1.png", "resin_digit_2.png", "resin_digit_4.png", "resin_digit_5.png", "resin_digit_6.png" })
         {
             using var t = new Template(file, new OpenCvSharp.Rect(0, 0, 1920, 1080));
             Assert.True(t.Image.Height >= 20);

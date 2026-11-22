@@ -81,7 +81,7 @@ public sealed class DomainFarmer : IDisposable
     private readonly Template _originalMax = new("resin_original_max.png", new Rect(900, 0, 900, 100), 0.85);
 
     /// <summary>Count digits next to it. Condensed resin goes up to 5; 3 has no sample yet (reads as unknown).</summary>
-    private readonly (int Digit, Template T)[] _digits = new[] { 0, 1, 2, 4, 5 }
+    private readonly (int Digit, Template T)[] _digits = new[] { 0, 1, 2, 4, 5, 6 }
         .Select(d => (d, new Template($"resin_digit_{d}.png", new Rect(0, 0, 1, 1), 0.85))).ToArray();
 
     public enum Phase
