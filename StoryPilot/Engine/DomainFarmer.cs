@@ -60,6 +60,9 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Centre of the Use buttons in that pop-up.</summary>
     private const int UseButtonX = 1266;
 
+    /// <summary>The swap button left of the original resin row's Use button (40 / 20 original resin).</summary>
+    private const int SwapButtonX = 1152;
+
     private readonly HashSet<int> _held = [];
     private TreeDetector? _tree;
     private bool _treeLoadFailed;
@@ -1158,6 +1161,33 @@ public sealed class DomainFarmer : IDisposable
             if (WaitFor(() => !Has(_condensedRow) && !Has(_originalRow), TimeSpan.FromSeconds(3)))
             {
                 return ResinPick.Used;
+            }
+
+            if (row == _originalRow)
+            {
+                // The original row spends 40 (double rewards) or 20; the swap button next to Use switches
+                // between them. With 20-39 left the 40 option fails, so switch to 20 and try once more.
+                Tap(Native.VK_ESCAPE); // close a "not enough resin" prompt, if one opened
+                Sleep(Vary(500));
+                if (!Has(_originalRow))
+                {
+                    // There was no prompt, so Esc closed the pop-up: open it again.
+                    Tap(Native.VK_F);
+                    WaitFor(() => Has(_originalRow), TimeSpan.FromSeconds(3));
+                }
+
+                if (Find(_originalRow) is { } again)
+                {
+                    y = again.Y + again.Height / 2;
+                    ClickFrame(SwapButtonX, y);
+                    Sleep(Vary(600));
+                    ClickFrame(UseButtonX, y);
+                    _log("Domain: switched the original resin amount (40/20) and tried again");
+                    if (WaitFor(() => !Has(_condensedRow) && !Has(_originalRow), TimeSpan.FromSeconds(3)))
+                    {
+                        return ResinPick.Used;
+                    }
+                }
             }
 
             Tap(Native.VK_ESCAPE);
