@@ -55,7 +55,7 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Resin icons on the left of the Petrified Tree pop-up rows (from your frame).</summary>
     private readonly Template _condensedRow = new("resin_condensed_row.png", new Rect(540, 420, 200, 420), 0.85);
 
-    private readonly Template _originalRow = new("resin_original_row.png", new Rect(540, 420, 200, 420), 0.85);
+    private readonly Template _originalRow = new("resin_original_row.png", new Rect(540, 420, 200, 420), 0.9);
 
     /// <summary>Centre of the Use buttons in that pop-up.</summary>
     private const int UseButtonX = 1266;
@@ -1131,6 +1131,39 @@ public sealed class DomainFarmer : IDisposable
     /// button on the right. Use condensed resin first, then original resin. The primogem row is never touched.
     /// A row that doesn't work (none left) leaves the pop-up open, so the next row is tried.
     /// </summary>
+    /// <summary>
+    /// A resin row's icon, checked by colour too: the Fragile Resin row (kept for later, never used) has a
+    /// purple moon that looks just like the original resin's blue moon in grey.
+    /// </summary>
+    private Rect? FindResinRow(Template row)
+    {
+        using var frame = Grab1080();
+        if (frame == null)
+        {
+            return null;
+        }
+
+        using var grey = frame.CvtColor(ColorConversionCodes.BGR2GRAY);
+        var icon = Vision.Find(grey, row);
+        if (icon == null || row != _originalRow)
+        {
+            return icon;
+        }
+
+        using var part = new Mat(frame, icon.Value & new Rect(0, 0, frame.Width, frame.Height));
+        var mean = Cv2.Mean(part); // B, G, R
+        if (!IsOriginalResinBlue(mean.Val2, mean.Val1))
+        {
+            _log($"Domain: skipped a row that looks like Fragile Resin (R {mean.Val2:0}, G {mean.Val1:0})");
+            return null;
+        }
+
+        return icon;
+    }
+
+    /// <summary>Original resin's icon is blue (red well under green); Fragile Resin's is purple (red over green).</summary>
+    internal static bool IsOriginalResinBlue(double red, double green) => red < green - 15;
+
     private ResinPick PickResin()
     {
         if (!WaitFor(() => Has(_condensedRow) || Has(_originalRow), TimeSpan.FromSeconds(5)))
@@ -1148,7 +1181,7 @@ public sealed class DomainFarmer : IDisposable
                 return ResinPick.NoPopup;
             }
 
-            var icon = Find(row);
+            var icon = FindResinRow(row);
             if (icon == null)
             {
                 continue;
@@ -1176,7 +1209,7 @@ public sealed class DomainFarmer : IDisposable
                     WaitFor(() => Has(_originalRow), TimeSpan.FromSeconds(3));
                 }
 
-                if (Find(_originalRow) is { } again)
+                if (FindResinRow(_originalRow) is { } again)
                 {
                     y = again.Y + again.Height / 2;
                     ClickFrame(SwapButtonX, y);

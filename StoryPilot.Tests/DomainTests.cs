@@ -259,4 +259,12 @@ public class DomainTests
         using var t = new Template("resin_original_max.png", new OpenCvSharp.Rect(0, 0, 1920, 1080));
         Assert.True(t.Image.Width > 50);
     }
+
+    [Theory]
+    [InlineData(123, 161, true)]  // original resin row (blue moon), from Naaj's pop-up
+    [InlineData(162, 148, false)] // Fragile Resin row (purple moon): never used
+    public void FragileResinRowIsNeverTakenForOriginal(double red, double green, bool original)
+    {
+        Assert.Equal(original, DomainFarmer.IsOriginalResinBlue(red, green));
+    }
 }
