@@ -217,7 +217,7 @@ public class DomainTests
             }
             else
             {
-                x += (int)part; // a gap
+                x += Convert.ToInt32(part); // a gap (given as a double, so it isn't read as a digit)
             }
         }
 
@@ -238,7 +238,7 @@ public class DomainTests
     public void ReadsTheNumberNearestTheChosenEnd()
     {
         // "12", a wide gap, then "40": from the right it's 40, from the left 12.
-        using var strip = NumberStrip(1, 2, 30, 4, 0);
+        using var strip = NumberStrip(1, 2, 30.0, 4, 0);
         var area = new OpenCvSharp.Rect(0, 0, 160, 46);
         Assert.Equal(40, DomainFarmer.ReadNumber(strip, Digits(), area, fromRight: true));
         Assert.Equal(12, DomainFarmer.ReadNumber(strip, Digits(), area, fromRight: false));
