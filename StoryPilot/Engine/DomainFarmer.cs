@@ -73,6 +73,10 @@ public sealed class DomainFarmer : IDisposable
     /// <summary>Condensed resin icon in the top bar of the tree pop-up and the reward screen (from your frames).</summary>
     private readonly Template _condensedTop = new("resin_condensed_top.png", new Rect(900, 0, 900, 100), 0.85);
 
+    // "/ 200" after the original resin count on the reward screen's top bar. Fragile Resin (the first
+    // moon) is never read or used: it is kept for later.
+    private readonly Template _originalMax = new("resin_original_max.png", new Rect(900, 0, 900, 100), 0.85);
+
     /// <summary>Count digits next to it. Condensed resin goes up to 5; 3 has no sample yet (reads as unknown).</summary>
     private readonly (int Digit, Template T)[] _digits = new[] { 0, 1, 2, 4, 5 }
         .Select(d => (d, new Template($"resin_digit_{d}.png", new Rect(0, 0, 1, 1), 0.85))).ToArray();
@@ -306,7 +310,7 @@ public sealed class DomainFarmer : IDisposable
     private bool WalkToKey()
     {
         Current = Phase.WalkingToKey;
-        _status($"Domain round {Rounds + 1}: walking to the key");
+        _status($"Domain round {Rounds + 1}: walking to the key{(_resinCounts == null ? "" : $" ({_resinCounts})")}");
         Hold(Native.VK_W, true);
         var sprint = StartSprint();
         var sprintUntil = DateTime.Now.AddMilliseconds(Rng.Next(1200, 2000));
@@ -1173,36 +1177,131 @@ public sealed class DomainFarmer : IDisposable
         return ResinPick.OutOfResin;
     }
 
-    /// <summary>Condensed resin count from the top bar, or null when it can't be read.</summary>
-    private int? ReadCondensed()
+    /// <summary>
+    /// Condensed resin left, from the reward screen's top bar: 0 when its icon isn't shown there
+    /// (the bar only lists condensed resin while you have some), null when the number can't be read.
+    /// </summary>
+    private int? ReadCondensed(Mat grey)
     {
-        using var frame = Grab1080();
-        using var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY);
-        if (grey == null)
-        {
-            return null;
-        }
-
         var icon = Vision.Find(grey, _condensedTop);
         if (icon == null)
         {
+            return 0;
+        }
+
+        return ReadNumber(grey, _digits, new Rect(icon.Value.X + icon.Value.Width, 26, 70, 46), fromRight: false);
+    }
+
+    /// <summary>Original resin left (the number before "/ 200"), or null when it can't be read.</summary>
+    private int? ReadOriginal(Mat grey)
+    {
+        var max = Vision.Find(grey, _originalMax);
+        if (max == null)
+        {
             return null;
         }
 
-        var area = new Rect(icon.Value.X + icon.Value.Width, 26, 60, 46);
-        int? best = null;
-        var bestScore = 0.0;
-        foreach (var (digit, t) in _digits)
+        return ReadNumber(grey, _digits, new Rect(max.Value.X - 70, max.Value.Y - 4, 68, max.Value.Height + 8), fromRight: true);
+    }
+
+    /// <summary>
+    /// Reads the white number nearest one end of the area, digit by digit. Null when any part of it isn't
+    /// one of the known digits (so a digit without a template never turns into a wrong number).
+    /// </summary>
+    internal static int? ReadNumber(Mat grey, IReadOnlyList<(int Digit, Template T)> digits, Rect area, bool fromRight)
+    {
+        area &= new Rect(0, 0, grey.Width, grey.Height);
+        if (area.Width < 20 || area.Height < 24)
         {
-            var score = Vision.Score(grey, t, area);
-            if (score > bestScore)
+            return null;
+        }
+
+        using var roi = new Mat(grey, area);
+
+        // Best match of each digit at each x, then keep the strongest that don't overlap.
+        var hits = new List<(int X, float Score, int Digit, int Width)>();
+        foreach (var (digit, t) in digits)
+        {
+            if (t.Image.Width > roi.Width || t.Image.Height > roi.Height)
             {
-                bestScore = score;
-                best = digit;
+                continue;
+            }
+
+            using var result = new Mat();
+            Cv2.MatchTemplate(roi, t.Image, result, TemplateMatchModes.CCoeffNormed);
+            using var columns = new Mat();
+            Cv2.Reduce(result, columns, ReduceDimension.Row, ReduceTypes.Max, MatType.CV_32F);
+            columns.GetArray<float>(out var col);
+            for (var x = 0; x < col.Length; x++)
+            {
+                if (col[x] < 0.85f)
+                {
+                    continue;
+                }
+
+                var peak = true;
+                for (var k = Math.Max(0, x - 3); k <= Math.Min(col.Length - 1, x + 3) && peak; k++)
+                {
+                    peak = col[k] <= col[x];
+                }
+
+                if (peak)
+                {
+                    hits.Add((x, col[x], digit, t.Image.Width));
+                }
             }
         }
 
-        return bestScore >= 0.85 ? best : null;
+        var kept = new List<(int X, float Score, int Digit, int Width)>();
+        foreach (var h in hits.OrderByDescending(h => h.Score))
+        {
+            if (kept.All(k => Math.Abs(k.X - h.X) >= 8))
+            {
+                kept.Add(h);
+            }
+        }
+
+        // The number: bright columns starting at one end, up to the first wide dark gap (an icon or "/").
+        using var bright = new Mat();
+        Cv2.Threshold(roi, bright, 200, 255, ThresholdTypes.Binary);
+        using var anyBright = new Mat();
+        Cv2.Reduce(bright, anyBright, ReduceDimension.Row, ReduceTypes.Max, MatType.CV_8U);
+        anyBright.GetArray<byte>(out var lit);
+        var group = new List<int>();
+        var gap = 0;
+        for (var i = 0; i < lit.Length; i++)
+        {
+            var c = fromRight ? lit.Length - 1 - i : i;
+            if (lit[c] > 0)
+            {
+                group.Add(c);
+                gap = 0;
+            }
+            else if (group.Count > 0 && ++gap > 10)
+            {
+                break;
+            }
+        }
+
+        if (group.Count == 0)
+        {
+            return null;
+        }
+
+        int lo = group.Min(), hi = group.Max();
+        var inNumber = kept.Where(k => k.X >= lo - 3 && k.X <= hi).OrderBy(k => k.X).ToList();
+        if (inNumber.Count == 0 || inNumber.Count > 4)
+        {
+            return null;
+        }
+
+        // Every lit column of the number must be inside a recognised digit.
+        if (group.Any(c => !inNumber.Any(k => c >= k.X - 2 && c <= k.X + k.Width + 2)))
+        {
+            return null;
+        }
+
+        return inNumber.Aggregate(0, (n, k) => n * 10 + k.Digit);
     }
 
     /// <summary>Close any pop-up, then leave with the top-left Leave Domain button and confirm.</summary>
@@ -1222,6 +1321,12 @@ public sealed class DomainFarmer : IDisposable
             _log("Domain: couldn't find the Leave Domain confirmation; you're still in the domain");
         }
     }
+
+    /// <summary>The resin counts read after the last round, shown in the status line.</summary>
+    private string? _resinCounts;
+
+    /// <summary>Original resin one domain round costs.</summary>
+    private const int OriginalPerRound = 20;
 
     private bool ClaimAndContinue()
     {
@@ -1268,10 +1373,27 @@ public sealed class DomainFarmer : IDisposable
 
         Rounds++;
         _log($"Domain: round {Rounds} claimed");
-        var condensedLeft = ReadCondensed();
-        if (condensedLeft == 0 && !_useOriginal)
+        int? condensedLeft, originalLeft;
+        using (var frame = Grab1080())
+        using (var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY))
         {
-            _log("Domain: that was the last condensed resin; leaving the domain");
+            condensedLeft = grey == null ? null : ReadCondensed(grey);
+            originalLeft = grey == null ? null : ReadOriginal(grey);
+        }
+
+        var counts = $"condensed resin left: {condensedLeft?.ToString() ?? "?"}, original resin left: {originalLeft?.ToString() ?? "?"}";
+        _log($"Domain: round {Rounds}: {counts}");
+        _resinCounts = counts;
+        _status($"Domain: round {Rounds} done. {counts}");
+
+        // Out of resin: no condensed left, and (when original is used too) less original than one round costs.
+        var outOfResin = condensedLeft == 0 && (!_useOriginal || originalLeft < OriginalPerRound);
+        if (outOfResin)
+        {
+            _log(_useOriginal
+                ? $"Domain: no condensed resin and only {originalLeft} original left (a round costs {OriginalPerRound}); leaving the domain"
+                : "Domain: that was the last condensed resin; leaving the domain");
+            _status($"Domain: out of resin after {Rounds} rounds ({counts}); leaving");
             Sleep(Rng.Next(700, 2500));
             using (var frame = Grab1080())
             using (var grey = frame?.CvtColor(ColorConversionCodes.BGR2GRAY))
@@ -1476,6 +1598,7 @@ public sealed class DomainFarmer : IDisposable
         _defeatBanner?.Dispose();
         _timer?.Dispose();
         _condensedTop.Dispose();
+        _originalMax.Dispose();
         _confirmAnywhere.Dispose();
         foreach (var (_, t) in _digits)
         {

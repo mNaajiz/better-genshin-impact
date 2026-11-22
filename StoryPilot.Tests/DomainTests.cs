@@ -201,4 +201,62 @@ public class DomainTests
         using var t = new Template("domain_defeat.png", new OpenCvSharp.Rect(0, 0, 1920, 1080));
         Assert.True(t.Image.Width > 80);
     }
+
+    private static Mat NumberStrip(params object[] parts)
+    {
+        // Dark bar with the digit templates (and solid blocks for unknown glyphs) laid out left to right.
+        var strip = new Mat(46, 160, MatType.CV_8UC1, Scalar.All(30));
+        var x = 4;
+        foreach (var part in parts)
+        {
+            if (part is int d)
+            {
+                using var t = new Template($"resin_digit_{d}.png", new OpenCvSharp.Rect(0, 0, 1, 1));
+                t.Image.CopyTo(new Mat(strip, new OpenCvSharp.Rect(x, 11, t.Image.Width, t.Image.Height)));
+                x += t.Image.Width + 4;
+            }
+            else
+            {
+                x += (int)part; // a gap
+            }
+        }
+
+        return strip;
+    }
+
+    private static (int, Template)[] Digits() =>
+        new[] { 0, 1, 2, 4, 5 }.Select(d => (d, new Template($"resin_digit_{d}.png", new OpenCvSharp.Rect(0, 0, 1, 1)))).ToArray();
+
+    [Fact]
+    public void ReadsTwoDigitResinCounts()
+    {
+        using var strip = NumberStrip(4, 2);
+        Assert.Equal(42, DomainFarmer.ReadNumber(strip, Digits(), new OpenCvSharp.Rect(0, 0, 160, 46), fromRight: false));
+    }
+
+    [Fact]
+    public void ReadsTheNumberNearestTheChosenEnd()
+    {
+        // "12", a wide gap, then "40": from the right it's 40, from the left 12.
+        using var strip = NumberStrip(1, 2, 30, 4, 0);
+        var area = new OpenCvSharp.Rect(0, 0, 160, 46);
+        Assert.Equal(40, DomainFarmer.ReadNumber(strip, Digits(), area, fromRight: true));
+        Assert.Equal(12, DomainFarmer.ReadNumber(strip, Digits(), area, fromRight: false));
+    }
+
+    [Fact]
+    public void UnknownGlyphMakesTheCountUnreadable()
+    {
+        using var strip = NumberStrip(4, 2);
+        // An unknown digit right after "42" (a solid bright block).
+        strip[new OpenCvSharp.Rect(46, 12, 12, 22)].SetTo(Scalar.All(250));
+        Assert.Null(DomainFarmer.ReadNumber(strip, Digits(), new OpenCvSharp.Rect(0, 0, 160, 46), fromRight: false));
+    }
+
+    [Fact]
+    public void OriginalResinMaxTemplateLoads()
+    {
+        using var t = new Template("resin_original_max.png", new OpenCvSharp.Rect(0, 0, 1920, 1080));
+        Assert.True(t.Image.Width > 50);
+    }
 }
