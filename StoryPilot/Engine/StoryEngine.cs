@@ -62,6 +62,10 @@ public sealed class StoryEngine : IDisposable
     private DomainFarmer? _domain;
     private volatile bool _domainRequested;
     private volatile bool _cancelDomain;
+    private Nav.CommissionRunner? _commissions;
+    private volatile bool _commissionsRequested;
+    private volatile bool _commissionsRunning;
+    private volatile bool _cancelCommissions;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -82,6 +86,19 @@ public sealed class StoryEngine : IDisposable
         else
         {
             _walkRequested = true;
+        }
+    }
+
+    /// <summary>Ctrl+Alt+C: do today's daily commissions (game in front), or stop.</summary>
+    public void ToggleCommissions()
+    {
+        if (_commissionsRunning)
+        {
+            _cancelCommissions = true;
+        }
+        else
+        {
+            _commissionsRequested = true;
         }
     }
 
@@ -218,6 +235,13 @@ public sealed class StoryEngine : IDisposable
 
         if (_settings.AutoTeleportOnWaypoint && TryAutoTeleport(bgr, grey, clientW, clientH))
         {
+            return;
+        }
+
+        if (_commissionsRequested)
+        {
+            _commissionsRequested = false;
+            RunCommissions(clientW, clientH);
             return;
         }
 
@@ -378,6 +402,31 @@ public sealed class StoryEngine : IDisposable
         {
             _walking = false;
             _cancelWalk = false;
+        }
+    }
+
+    private void RunCommissions(int clientW, int clientH)
+    {
+        StatusChanged?.Invoke("Daily commissions (Ctrl+Alt+C stops)");
+        _commissions ??= new Nav.CommissionRunner(() => _capture?.Grab(), () => _running && !_cancelCommissions,
+            line => Log?.Invoke(line), s => StatusChanged?.Invoke(s));
+        _cancelCommissions = false;
+        _commissionsRunning = true;
+        try
+        {
+            _commissions.Run(_hWnd, _input!, _settings.DomainRotation, clientW, clientH);
+        }
+        catch (Exception e)
+        {
+            Log?.Invoke("Commissions stopped on an error: " + e.Message);
+        }
+        finally
+        {
+            _commissionsRunning = false;
+            _cancelCommissions = false;
+            Native.SendKey(Native.VK_W, true);
+            Native.SendKey(Native.VK_SHIFT, true);
+            Native.SendLeftButton(false);
         }
     }
 
@@ -746,6 +795,7 @@ public sealed class StoryEngine : IDisposable
         _autoTeleport?.Dispose();
         _walker?.Dispose();
         _domain?.Dispose();
+        _commissions?.Dispose();
         foreach (var t in new[] { _talkUi, _optionIcon, _exclamationIcon, _chatPickF, _hangoutSkip, _pageClose, _guidingNotes, _chatHistory, _valiantChronicles, _paimonMenu, _mapScale, _mapSettings })
         {
             t.Dispose();

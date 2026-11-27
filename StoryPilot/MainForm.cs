@@ -10,6 +10,7 @@ public sealed class MainForm : Form
     private const int HotkeyId = 0x5150;
     private const int WalkHotkeyId = 0x5151;
     private const int DomainHotkeyId = 0x5152;
+    private const int CommissionHotkeyId = 0x5153;
 
     private static readonly Color StartColor = Color.FromArgb(46, 125, 50);
     private static readonly Color StopColor = Color.FromArgb(198, 40, 40);
@@ -82,7 +83,7 @@ public sealed class MainForm : Form
 
         body.Controls.Add(new Label
         {
-            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops. Ctrl+Alt+W walks to the quest marker (game in front). Ctrl+Alt+D farms a domain from its door (game in front); press it again once the challenge is complete.",
+            Text = "Keep the game windowed. It can be behind other windows, but not minimized. Ctrl+Alt+P starts/stops. Ctrl+Alt+W walks to the quest marker (game in front). Ctrl+Alt+D farms a domain from its door (game in front); press it again once the challenge is complete. Ctrl+Alt+C does today's Mondstadt combat commissions (game in front; test build).",
             AutoSize = true,
             MaximumSize = new Size(370, 0),
             ForeColor = SystemColors.GrayText,
@@ -281,6 +282,11 @@ public sealed class MainForm : Form
             _lastAction.Text = "Ctrl+Alt+D is used by another app.";
         }
 
+        if (!Native.RegisterHotKey(Handle, CommissionHotkeyId, Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.C))
+        {
+            _lastAction.Text = "Ctrl+Alt+C is used by another app.";
+        }
+
         if (!Native.RegisterHotKey(Handle, WalkHotkeyId, Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, (uint)Keys.W))
         {
             _lastAction.Text = "Ctrl+Alt+W is used by another app.";
@@ -316,6 +322,17 @@ public sealed class MainForm : Form
                 _lastAction.Text = "Press Start first, then Ctrl+Alt+D at the domain door.";
             }
         }
+        else if (m.Msg == (int)Native.WM_HOTKEY && m.WParam == CommissionHotkeyId)
+        {
+            if (_engine.IsRunning)
+            {
+                _engine.ToggleCommissions();
+            }
+            else
+            {
+                _lastAction.Text = "Press Start first, then Ctrl+Alt+C (game in front) for daily commissions.";
+            }
+        }
 
         base.WndProc(ref m);
     }
@@ -325,6 +342,7 @@ public sealed class MainForm : Form
         Native.UnregisterHotKey(Handle, HotkeyId);
         Native.UnregisterHotKey(Handle, WalkHotkeyId);
         Native.UnregisterHotKey(Handle, DomainHotkeyId);
+        Native.UnregisterHotKey(Handle, CommissionHotkeyId);
         _statsTimer.Stop();
         _engine.Dispose();
         base.OnFormClosing(e);
