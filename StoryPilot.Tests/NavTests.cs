@@ -91,5 +91,37 @@ public class NavTests(ITestOutputHelper output)
         }
     }
 
+    [Fact]
+    public void ConvertsBetweenMapImageAndWorld()
+    {
+        var w = new Point2f(-1234.5f, 2345.25f);
+        var back = BigMapLocator.Img256ToWorld(BigMapLocator.WorldToImg256(w));
+        Assert.True(back.DistanceTo(w) < 0.01);
+    }
+
+    [Theory]
+    [InlineData("map_on_quest.png")]
+    [InlineData("map_quest_button.png")]
+    public void LocatesTheBigMap(string file)
+    {
+        var dir = MapDir();
+        var shots = FindUp("LocalData");
+        if (dir == null || shots == null || !File.Exists(Path.Combine(shots, file)))
+        {
+            output.WriteLine("No map pieces or screenshot; skipped.");
+            return;
+        }
+
+        using var big = BigMapLocator.Load(dir);
+        Assert.NotNull(big);
+        using var frame = Cv2.ImRead(Path.Combine(shots, file), ImreadModes.Color);
+        var sw = Stopwatch.StartNew();
+        using var view = big!.Locate(frame);
+        output.WriteLine(view == null ? "no match" : $"centre ({view.Centre.X:F1}, {view.Centre.Y:F1}), {view.PixelsPerUnit:F3} px/unit, {view.Inliers} inliers, {sw.ElapsedMilliseconds} ms");
+        Assert.NotNull(view);
+        var p = view!.WorldToScreen(view.Centre);
+        Assert.True(Math.Abs(p.X - 960) < 1 && Math.Abs(p.Y - 540) < 1);
+    }
+
     private static string Fmt(Point2f? p) => p is { } v ? $"({v.X:F1}, {v.Y:F1})" : "none";
 }
