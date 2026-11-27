@@ -85,6 +85,12 @@ Domain farming needs BetterGI's reward-tree model, which isn't in git. Copy it f
 python StoryPilot/tools/prepare_tree_model.py "<BetterGI folder>/Assets/Model/Domain/bgi_tree.onnx"
 ```
 
+Daily commissions need BetterGI's map pieces (about 180 MB), also not in git. Copy the folder `Assets\Map\Teyvat` from a BetterGI build or install to `StoryPilot\Assets\Map\Teyvat` before building. The commission routes in `Assets\Commissions` come from the community AutoCommissionNova script (bettergi-scripts-list, GPL-3.0); `tools/import_commissions.py` regenerates them.
+
+## Daily commissions (test build)
+
+Ctrl+Alt+C with the game in front, commissions accepted in Mondstadt. It opens the Adventurer Handbook, finds each commission's map position, and does the combat ones: teleport, walk the community route with minimap tracking, fight with your domain rotation. NPC commissions are listed in the log and left for you. Screens it relies on are saved to `Pictures\StoryPilot\commission`.
+
 ## Licence
 
 GPL-3.0, the same as BetterGI. The image templates and recognition regions come from BetterGI. The capture code is adapted from `Fischless.GameCapture`.

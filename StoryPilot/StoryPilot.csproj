@@ -33,6 +33,8 @@
     <None Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
     <!-- Community commission routes (bettergi-scripts-list AutoCommissionNova, GPL-3.0), see tools/import_commissions.py. -->
     <None Include="Assets\Commissions\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- BetterGI map pieces for commissions; not in git (copied from a BetterGI build, see README). -->
+    <None Include="Assets\Map\Teyvat\**" CopyToOutputDirectory="PreserveNewest" />
     <!-- BetterGI's reward-tree model; not in git (copied from a BetterGI install, see README). -->
     <None Include="Assets\Model\*.onnx" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
