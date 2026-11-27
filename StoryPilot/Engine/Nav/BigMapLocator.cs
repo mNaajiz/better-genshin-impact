@@ -2,6 +2,7 @@
 // TeyvatMap coordinate conversion), GPL-3.0.
 using System.Runtime.InteropServices;
 using OpenCvSharp;
+using OpenCvSharp.Features2D;
 using Point = OpenCvSharp.Point;
 using Size = OpenCvSharp.Size;
 
