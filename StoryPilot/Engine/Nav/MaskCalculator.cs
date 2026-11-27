@@ -7,7 +7,6 @@ namespace StoryPilot.Engine.Nav;
 
 using static StoryPilot.Engine.Nav.MiniMapPreprocessorUtils;
 using Point = OpenCvSharp.Point;
-using Size = OpenCvSharp.Size;
 
 public class MaskCalculator : IDisposable
 {
@@ -17,7 +16,7 @@ public class MaskCalculator : IDisposable
     private readonly Mat _angle = new Mat();
     private readonly Mat _sectorMask = new Mat(Size, Size, MatType.CV_8UC3);
     private readonly Mat _circleMask = Mat.Zeros(Size, Size, MatType.CV_8UC1);
-    private readonly Mat _kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(5, 5));
+    private readonly Mat _kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(5, 5));
     private readonly Mat _outMatF = new Mat(Size, Size, MatType.CV_32FC3);
     private readonly Mat _outMask = new Mat(Size, Size, MatType.CV_8UC1);
 
@@ -77,7 +76,7 @@ public class MaskCalculator : IDisposable
     private void CreatSectorMask(int angle)
     {
         _alphaMask2.CopyTo(_sectorMask);
-        Cv2.Ellipse(_sectorMask, new Point(Size / 2, Size / 2), new Size(Size, Size), 0, angle + 45.5, angle + 314.5, new Scalar(255, 255, 255), -1);
+        Cv2.Ellipse(_sectorMask, new Point(Size / 2, Size / 2), new OpenCvSharp.Size(Size, Size), 0, angle + 45.5, angle + 314.5, new Scalar(255, 255, 255), -1);
     }
 
     private void CreatBgMask(Mat bgrMat)
@@ -117,7 +116,7 @@ public class MaskCalculator : IDisposable
         Cv2.Add(diff, 10, diff);
         cmax.SetTo(255, _outMask);
         Cv2.Divide(cmax, diff, cmax, 10);
-        //Cv2.GaussianBlur(cmax,cmax, new Size(3,3), 0.5);
+        //Cv2.GaussianBlur(cmax,cmax, new OpenCvSharp.Size(3,3), 0.5);
         //Cv2.MorphologyEx(cmax,cmax, MorphTypes.Open, Mat.Ones(2, 2, MatType.CV_8UC1));
         Cv2.Threshold(cmax, _outMask, 200, 255, ThresholdTypes.Binary);
         Cv2.Dilate(_outMask, _outMask, _kernel);

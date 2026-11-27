@@ -7,7 +7,6 @@ namespace StoryPilot.Engine.Nav;
 
 using static StoryPilot.Engine.Nav.MiniMapPreprocessorUtils;
 using Point = OpenCvSharp.Point;
-using Size = OpenCvSharp.Size;
 
 public class CameraOrientationCalculator : IDisposable
 {
@@ -113,7 +112,7 @@ public class CameraOrientationCalculator : IDisposable
                 }
             }
         }
-        Cv2.Resize(result, result, new Size(result.Width * Scale, 1), 0, 0, InterpolationFlags.Cubic);
+        Cv2.Resize(result, result, new OpenCvSharp.Size(result.Width * Scale, 1), 0, 0, InterpolationFlags.Cubic);
         RightShiftCv(result, resultShift, PeakWidth);
         using var peakRegion = resultShift[0, 1, 0, PeakWidth];
         var peakRegionSum = Cv2.Sum(peakRegion).Val0;
